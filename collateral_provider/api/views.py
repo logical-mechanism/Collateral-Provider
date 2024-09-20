@@ -130,6 +130,10 @@ def landing_page(_):
             <body>
                 <h1>Welcome to the Collateral Provider!</h1>
                 <pre>{json.dumps(content, indent=4)}</pre>
+                <br/>
+                <a href="https://github.com/logical-mechanism/Collateral-Provider?tab=readme-ov-file#example-use" target="_blank" rel="noopener noreferrer">
+                    View Github For Example Use
+                </a>
             </body>
         </html>
     """)

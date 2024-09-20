@@ -8,11 +8,13 @@ Please reference a guide to set up a server to serve the Django app. A sample en
 
 ### Example Use
 
+Change preprod to mainnet or whichever network is available at the url you are using.
+
 ```bash
-curl -X POST https://www.giveme.my/preprod/collateral/ \
+curl -X POST https://www.your_url_here/preprod/collateral/ \
   -H 'Content-Type: application/json' \
   -d '{
-        "tx_body": '${tx_body_cbor}'
+        "tx_body": "tx_body_cbor"
       }'
 ```
 
