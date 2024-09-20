@@ -1,6 +1,7 @@
 # api/views.py
 
 import json
+import logging
 import os
 import tempfile
 
@@ -12,6 +13,8 @@ from rest_framework.views import APIView
 from .cli import witness
 from .serializers import ProvideCollateralSerializer
 
+logger = logging.getLogger('api')
+
 
 class ProvideCollateralThrottle(throttling.AnonRateThrottle):
     # set this to whatever makes sense
@@ -22,21 +25,35 @@ class ProvideCollateralView(APIView):
     throttle_classes = [ProvideCollateralThrottle]
 
     def post(self, request, environment):
+        # Get client's IP address
+        ip_address = self.get_client_ip(request)
+
+        logger.info(
+            f'Request received from {ip_address} for environment: {environment}')
+
+        # Check if the environment is valid
         env_settings = settings.ENVIRONMENTS.get(environment)
         if not env_settings:
+            logger.warning(
+                f'Invalid environment "{environment}" from {ip_address}')
             return Response({"error": "Invalid environment specified."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Log the incoming request data
         serializer = ProvideCollateralSerializer(
             data=request.data,
             context={
                 'environment': environment,
                 'env_settings': env_settings,
+                'ip_address': ip_address,
             }
         )
+
         if serializer.is_valid():
             tx_body_cbor = serializer.validated_data['tx_body']
+            logger.info(
+                f'Valid data received from {ip_address} for environment {environment}')
 
-            # we need the tx draft file
+            # Temporary files for tx draft and witness
             with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tx_draft:
                 tx_body_content = {
                     "type": "Unwitnessed Tx ConwayEra",
@@ -46,27 +63,47 @@ class ProvideCollateralView(APIView):
                 json.dump(tx_body_content, tx_draft)
                 tx_draft_file_path = tx_draft.name
 
-            # need a temp file for the signed tx
             with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tx_witness:
                 tx_witness_file_path = tx_witness.name
 
-            # witness the tx draft
+            # Witness the transaction
             witness(tx_draft_file_path, tx_witness_file_path,
                     env_settings['NETWORK'], settings.KEY_PATH, settings.CLI_PATH)
 
-            # get the cborHex of the witness
-            with open(tx_witness_file_path, 'r') as temp_file:
-                witness_data = json.load(temp_file)
+            # Get the cborHex of the witness
             try:
+                with open(tx_witness_file_path, 'r') as temp_file:
+                    witness_data = json.load(temp_file)
                 witness_cbor = witness_data['cborHex']
             except KeyError as e:
+                logger.error(
+                    f'Missing cborHex in witness data for {ip_address}')
                 return Response(e, status=status.HTTP_400_BAD_REQUEST)
+            except Exception as e:
+                logger.error(
+                    f'Error processing witness for {ip_address}: {str(e)}')
+                return Response({"error": "Failed to process the witness."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-            # remove the temp files
+            # Remove temporary files
             os.remove(tx_draft_file_path)
             os.remove(tx_witness_file_path)
 
-            # if everything went ok return the cbor and 200
+            logger.info(
+                f'Successfully processed witness for {ip_address} and environment {environment}')
+
+            # Return the witness data
             return Response({'witness': witness_cbor}, status=status.HTTP_200_OK)
+
         else:
+            logger.warning(
+                f'Invalid data from {ip_address}: {serializer.errors}')
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def get_client_ip(self, request):
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            # Get the first IP from the list
+            ip = x_forwarded_for.split(',')[0]
+        else:
+            ip = request.META.get('REMOTE_ADDR')
+        return ip
