@@ -6,6 +6,8 @@ import os
 import tempfile
 
 from django.conf import settings
+from django.http import HttpResponse
+from django.shortcuts import redirect
 from rest_framework import status, throttling
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -107,3 +109,31 @@ class ProvideCollateralView(APIView):
         else:
             ip = request.META.get('REMOTE_ADDR')
         return ip
+
+
+# very simply landing page that auto loads from the known.host.json file
+def landing_page(_):
+    # Get the parent directory of BASE_DIR
+    parent_dir = os.path.abspath(os.path.join(settings.BASE_DIR, os.pardir))
+    # Load the JSON file from the parent directory
+    json_file_path = os.path.join(parent_dir, 'known.hosts.json')
+    with open(json_file_path, 'r') as json_file:
+        data = json.load(json_file)
+    content = data.get(settings.PKH, "Public Key Hash Not Found In Known Hosts")
+    return HttpResponse(f"""
+        <html>
+            <head>
+                <meta charset="UTF-8">
+                <link rel="icon" type="image/x-icon" href="{settings.STATIC_URL}favicon.ico">
+                <title>Collateral Provider</title>
+            </head>
+            <body>
+                <h1>Welcome to the Collateral Provider!</h1>
+                <pre>{json.dumps(content, indent=4)}</pre>
+            </body>
+        </html>
+    """)
+
+
+def custom_page_not_found(request, exception):
+    return redirect('/')
