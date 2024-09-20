@@ -112,7 +112,7 @@ class ProvideCollateralView(APIView):
 
 
 # very simply landing page that auto loads from the known.host.json file
-def landing_page(_):
+def landing_page(request):
     # Get the parent directory of BASE_DIR
     parent_dir = os.path.abspath(os.path.join(settings.BASE_DIR, os.pardir))
     # Load the JSON file from the parent directory

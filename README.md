@@ -4,6 +4,8 @@ This repo aims to provide the back-end code that allows anyone to run an altruis
 
 The design of this repo is to allow a provider to host on just mainnet or any of the testnets. The back-end code does not require a full node. However, the code requires a blockfront API key for the networks used. Providers setting up their back end must configure the settings file to correctly reflect which networks they want to provide collateral. The code requires a cardano-cli binary to live in the `api/bin` folder. The collateral keys live in the `api/key` folder.
 
+A single `payment.skey` must exist to witness transaction. This key will be used on all the networks. Currently, five ADA is the suggested collateral amount.
+
 Please reference a guide to set up a server to serve the Django app. A sample environment file is provided.
 
 ### Example Use
