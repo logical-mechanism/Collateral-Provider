@@ -129,6 +129,10 @@ def landing_page(_):
             </head>
             <body>
                 <h1>Welcome to the Collateral Provider!</h1>
+                <h2>Required Signer Hash</h2>
+                <p">{settings.PKH}</p>
+                <br/>
+                <h2>Available Networks:</h2>
                 <pre>{json.dumps(content, indent=4)}</pre>
                 <br/>
                 <a href="https://github.com/logical-mechanism/Collateral-Provider?tab=readme-ov-file#example-use" target="_blank" rel="noopener noreferrer">
