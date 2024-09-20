@@ -134,3 +134,24 @@ LOGGING = {
         },
     },
 }
+
+# Production-specific settings
+if ENVIRONMENT == 'production':
+    # Enforce HTTPS
+    SECURE_SSL_REDIRECT = True
+
+    # HSTS to enforce HTTPS in browsers
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+
+    # If you're not using Django sessions or CSRF, you can skip these
+    SESSION_COOKIE_SECURE = False  # Not needed if no session-based authentication
+    CSRF_COOKIE_SECURE = False  # No CSRF needed for open API
+    CSRF_COOKIE_HTTPONLY = False  # CSRF not required for open API
+    CSRF_COOKIE_SAMESITE = None  # Not applicable if CSRF is disabled
+else:
+    # In development or testing environments
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    SECURE_SSL_REDIRECT = False

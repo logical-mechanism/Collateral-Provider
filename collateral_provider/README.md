@@ -18,7 +18,7 @@ curl -X POST https://www.giveme.my/mainnet/collateral/ \
 
 # Testing
 ```bash
-curl -X POST http://127.0.0.1:8000/preprod/collateral/ \
+curl -X POST https://127.0.0.1:8000/preprod/collateral/ \
   -H 'Content-Type: application/json' \
   -d '{
         "tx_body":
