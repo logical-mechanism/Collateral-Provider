@@ -15,6 +15,7 @@ PKH = env('PKH')
 CLI_PATH = os.path.join(BASE_DIR, 'api/bin/cardano-cli')
 KEY_PATH = os.path.join(BASE_DIR, 'api/key/payment.skey')
 SECRET_KEY = env('SECRET_KEY')
+ENVIRONMENT = env('ENVIRONMENT')
 
 ENVIRONMENTS = {
     # 'preview': {
@@ -39,7 +40,7 @@ ENVIRONMENTS = {
 
 DEBUG = False
 
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost'] if ENVIRONMENT == "development" else env.list('ALLOWED_HOSTS')
 
 INSTALLED_APPS = [
     'django.contrib.auth',
