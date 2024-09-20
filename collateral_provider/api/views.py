@@ -6,7 +6,7 @@ import os
 import tempfile
 
 from django.conf import settings
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect
 from rest_framework import status, throttling
 from rest_framework.response import Response
@@ -119,7 +119,8 @@ def landing_page(_):
     json_file_path = os.path.join(parent_dir, 'known.hosts.json')
     with open(json_file_path, 'r') as json_file:
         data = json.load(json_file)
-    content = data.get(settings.PKH, "Public Key Hash Not Found In Known Hosts")
+    content = data.get(
+        settings.PKH, "Public Key Hash Not Found In Known Hosts")
     return HttpResponse(f"""
         <html>
             <head>
@@ -145,3 +146,17 @@ def landing_page(_):
 
 def custom_page_not_found(request, exception):
     return redirect('/')
+
+
+def known_hosts_view(request):
+    # Get the parent directory of BASE_DIR
+    parent_dir = os.path.abspath(os.path.join(settings.BASE_DIR, os.pardir))
+    # Load the JSON file from the parent directory
+    json_file_path = os.path.join(parent_dir, 'known.hosts.json')
+    try:
+        with open(json_file_path, 'r') as json_file:
+            data = json.load(json_file)
+    except FileNotFoundError:
+        return JsonResponse({'error': 'File not found'}, status=404)
+    # Return the JSON response
+    return JsonResponse(data)
