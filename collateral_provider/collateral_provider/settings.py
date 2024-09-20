@@ -45,6 +45,7 @@ ALLOWED_HOSTS = ['127.0.0.1', 'localhost'] if ENVIRONMENT == "development" else 
 INSTALLED_APPS = [
     'django.contrib.auth',
     'django.contrib.contenttypes',
+    'django.contrib.staticfiles',
     'rest_framework',
     'corsheaders',
     'api'
@@ -172,3 +173,9 @@ else:
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
     SECURE_SSL_REDIRECT = False
+
+
+STATIC_URL = '/static/'
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR, 'static'),  # This is your static folder
+]
