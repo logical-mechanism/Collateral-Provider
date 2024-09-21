@@ -122,6 +122,7 @@ def landing_page(request):
     content = data.get(
         settings.PKH, "Public Key Hash Not Found In Known Hosts")
     return HttpResponse(f"""
+        <!DOCTYPE html>
         <html lang="en">
             <head>
                 <meta charset="UTF-8">
@@ -140,11 +141,11 @@ def landing_page(request):
             </head>
             <body>
                 <header>
-                    <h1>Welcome to the Collateral Provider!</h1>
+                    <h1>Cardano Collateral Provider</h1>
                 </header>
                 <main>
                     <section>
-                        <h2>Required Signer Hash</h2>
+                        <h2>Required Signer Hash:</h2>
                         <p>{settings.PKH}</p>
                     </section>
                     <section>
