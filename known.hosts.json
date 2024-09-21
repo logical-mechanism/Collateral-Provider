@@ -20,7 +20,7 @@
     }
   },
   "c59da4ec6e515c2efc8866274dee6ac9a64b5945efd365f3a999e760": {
-    "preprod": {
+    "testnet": {
       "utxo": {
         "id": "68333201e493dd41b848bd742151c31060a749a49bc48d0b09541bcc840ac0c9",
         "idx": 0

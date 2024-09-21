@@ -8,6 +8,14 @@ A single `payment.skey` must exist to witness transaction. This key will be used
 
 Please reference a guide to set up a server to serve the Django app. A sample environment file is provided.
 
+### How do I use it?
+
+A collateral UTxO is required when building a smart contract transaction on Cardano. Typically, the wallet creating the transaction provides the collateral UTxO. Users will be able to use one of the collateral UTxOs from the known hosts inside of transactions. It is as simple as including a signer requirement for the collateral public key hash and the UTxO information inside the transaction. 
+
+### Why should I use it?
+
+There are situations where providing collateral is a security and privacy concern. This API allows many users to use the same collateral while maintaining a certain level of anonymity. Other than privacy, it also provides a method for new users to have collateral without forcing the user to set one up in their wallet.
+
 ### Example Use
 
 Change preprod to mainnet or whichever network is available at the url you are using.
@@ -19,6 +27,8 @@ curl -X POST https://www.your_url_here/preprod/collateral/ \
         "tx_body": "tx_body_cbor"
       }'
 ```
+
+For more examples, please refer to the scripts folder.
 
 ## Setup
 
