@@ -122,29 +122,57 @@ def landing_page(request):
     content = data.get(
         settings.PKH, "Public Key Hash Not Found In Known Hosts")
     return HttpResponse(f"""
-        <html>
+        <html lang="en">
             <head>
                 <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <meta name="description" content="An altruistic collateral provider that offers complimentary access to collateral UTxOs on Cardano.">
+                <meta name="keywords" content="collateral provider, Cardano, blockchain, decentralized, smart contracts, networks">
+                <meta name="robots" content="index, follow">
+                <link rel="canonical" href="https://giveme.my">
+                <meta property="og:title" content="Cardano Collateral Provider">
+                <meta property="og:description" content="An altruistic collateral provider that offers complimentary access to collateral UTxOs on Cardano."">
+                <meta property="og:url" content="https://giveme.my">
+                <meta property="og:type" content="website">
+                <meta property="og:image" content="{settings.STATIC_URL}android-chrome-512x512.png">
                 <link rel="icon" type="image/x-icon" href="{settings.STATIC_URL}favicon.ico">
-                <title>Collateral Provider</title>
+                <title>Cardano Collateral Provider</title>
             </head>
             <body>
-                <h1>Welcome to the Collateral Provider!</h1>
-                <h2>Required Signer Hash</h2>
-                <p">{settings.PKH}</p>
-                <br/>
-                <h2>Available Networks:</h2>
-                <pre>{json.dumps(content, indent=4)}</pre>
-                <br/>
-                <a href="https://github.com/logical-mechanism/Collateral-Provider?tab=readme-ov-file#example-use" target="_blank" rel="noopener noreferrer">
-                    View Github For Example Use
-                </a>
-                <br/>
-                <a href="/known_hosts/">
-                    View Known Collateral Providers
-                </a>
+                <header>
+                    <h1>Welcome to the Collateral Provider!</h1>
+                </header>
+                <main>
+                    <section>
+                        <h2>Required Signer Hash</h2>
+                        <p>{settings.PKH}</p>
+                    </section>
+                    <section>
+                        <h2>Available Networks:</h2>
+                        <pre>{json.dumps(content, indent=4)}</pre>
+                    </section>
+                    <section>
+                        <h2>Resources</h2>
+                        <ul>
+                            <li>
+                                <a href="https://github.com/logical-mechanism/Collateral-Provider?tab=readme-ov-file#example-use" target="_blank" rel="noopener noreferrer">
+                                    View GitHub for Example Use
+                                </a>
+                            </li>
+                            <li>
+                                <a href="/known_hosts/">
+                                    View Known Collateral Providers
+                                </a>
+                            </li>
+                        </ul>
+                    </section>
+                </main>
+                <footer>
+                    <p>Created By Logical Mechanism LLC</p>
+                </footer>
             </body>
         </html>
+
     """)
 
 
