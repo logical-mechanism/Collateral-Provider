@@ -38,6 +38,7 @@ ENVIRONMENTS = {
     # },
 }
 
+# False is production
 DEBUG = False
 
 ALLOWED_HOSTS = ['127.0.0.1', 'localhost'] if ENVIRONMENT == "development" else env.list('ALLOWED_HOSTS')
@@ -52,6 +53,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'api.middleware.HandleDisallowedHostMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -148,6 +150,11 @@ LOGGING = {
         'api': {
             'handlers': ['file'],
             'level': 'DEBUG',
+            'propagate': False,
+        },
+        'django.security.DisallowedHost': {
+            'handlers': ['file'],
+            'level': 'WARNING',  # Reduce the log level to WARNING
             'propagate': False,
         },
     },

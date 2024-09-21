@@ -1,6 +1,5 @@
-from api.views import (ProvideCollateralView, custom_page_not_found,
-                       known_hosts_view, landing_page)
-from django.conf.urls import handler404
+from api.views import (ProvideCollateralView, custom_disallowed_host_handler,
+                       custom_page_not_found, known_hosts_view, landing_page)
 from django.urls import path
 
 urlpatterns = [
@@ -10,3 +9,4 @@ urlpatterns = [
 ]
 
 handler404 = custom_page_not_found
+handler400 = custom_disallowed_host_handler

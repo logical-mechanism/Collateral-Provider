@@ -6,7 +6,7 @@ import cbor2
 from django.conf import settings
 from rest_framework import serializers
 
-from .ban_list import banned_ip_address
+from .ban_list import banned_addresses, banned_ip_address
 from .simulate import evaluate_tx
 
 # Initialize the logger
@@ -25,7 +25,7 @@ class ProvideCollateralSerializer(serializers.Serializer):
         env_settings = self.context.get('env_settings')
         ip_address = self.context.get('ip_address')
 
-        logger.info(f"Validating tx_body for request from {ip_address}")
+        logger.info(f"validating tx_body for request from {ip_address}")
 
         if ip_address in banned_ip_address:
             logger.error(
@@ -34,33 +34,33 @@ class ProvideCollateralSerializer(serializers.Serializer):
 
         if environment not in ['preprod', 'mainnet']:
             logger.error(
-                f"Invalid environment {environment} from {ip_address}")
+                f"invalid environment {environment} from {ip_address}")
             raise serializers.ValidationError("wrong environment")
 
         # Ensure tx_body is not just whitespace after trimming
         if not tx_body_cbor:
-            logger.error(f"Empty tx_body from {ip_address}")
+            logger.error(f"empty tx_body from {ip_address}")
             raise serializers.ValidationError("tx_body cannot be empty")
 
         # ensure that the cbor decodes correctly
         try:
             tx_bytes = bytes.fromhex(tx_body_cbor)
         except ValueError:
-            logger.error(f"Invalid hex data in tx_body from {ip_address}")
+            logger.error(f"invalid hex data in tx_body from {ip_address}")
             raise serializers.ValidationError("invalid hex data in tx_body")
 
         # Enforce maximum transaction size
         max_tx_size = 16384  # in bytes
         tx_size = len(tx_bytes)
         if tx_size > max_tx_size:
-            logger.error(f"Transaction size exceeds maximum from {ip_address}")
+            logger.error(f"transaction size exceeds maximum from {ip_address}")
             raise serializers.ValidationError(
-                "Transaction size exceeds the maximum allowed size")
+                "transaction size exceeds the maximum allowed size")
 
         try:
             tx_body = cbor2.loads(tx_bytes)
         except cbor2.CBORDecodeError:
-            logger.error(f"Invalid CBOR data in tx_body from {ip_address}")
+            logger.error(f"invalid CBOR data in tx_body from {ip_address}")
             raise serializers.ValidationError("invalid cbor data in tx_body")
 
         # ensure that the tx body decodes correctly
@@ -73,60 +73,92 @@ class ProvideCollateralSerializer(serializers.Serializer):
             boolean = tx_body[2]
         except IndexError:
             logger.error(
-                f"Boolean does not exist in tx_body from {ip_address}")
+                f"boolean does not exist in tx_body from {ip_address}")
             raise serializers.ValidationError("boolean does not exist")
         if not isinstance(boolean, bool):
-            logger.error(f"Boolean is not a bool in tx_body from {ip_address}")
+            logger.error(f"boolean is not a bool in tx_body from {ip_address}")
             raise serializers.ValidationError("boolean is not a bool")
         if boolean is False:
-            logger.error(f"Boolean is false in tx_body from {ip_address}")
+            logger.error(f"boolean is false in tx_body from {ip_address}")
             raise serializers.ValidationError("boolean can not be false")
 
         # ensure the actual body decodes correctly
         try:
             body = tx_body[0]
         except IndexError:
-            logger.error(f"Body does not exist in tx_body from {ip_address}")
+            logger.error(f"body does not exist in tx_body from {ip_address}")
             raise serializers.ValidationError("body does not exist")
         if not isinstance(body, dict):
-            logger.error(f"Body is not a dict in tx_body from {ip_address}")
+            logger.error(f"body is not a dict in tx_body from {ip_address}")
             raise serializers.ValidationError("body is not a dict")
 
         # check if inputs is correct form (0)
         try:
             inputs = body[0]
         except KeyError:
-            logger.error(f"Inputs do not exist in tx_body from {ip_address}")
+            logger.error(f"inputs do not exist in tx_body from {ip_address}")
             raise serializers.ValidationError("inputs does not exist")
         if not isinstance(inputs, set):
-            logger.error(f"Inputs is not a set in tx_body from {ip_address}")
-            raise serializers.ValidationError("inputs is not a set")
+            logger.error(f"inputs is not a set in tx_body from {ip_address}")
+            raise serializers.ValidationError("inputs are not a set")
+
+        # check if outputs is correct form (1)
+        # an output doesn't have to exist so dont raise an error here
+        try:
+            outputs = body[1]
+            if not isinstance(outputs, list):
+                logger.error(
+                    f"outputs is not a set in tx_body from {ip_address}")
+                raise serializers.ValidationError("outputs are not a list")
+            for utxo in outputs:
+                if not isinstance(utxo, list) and not isinstance(utxo, dict):
+                    logger.error(
+                        f"utxo is not a list or dict in tx_body from {ip_address}")
+                    raise serializers.ValidationError(
+                        "utxo is not a list or dict")
+                try:
+                    utxo[0]
+                except (IndexError, KeyError):
+                    logger.error(
+                        f"address does not exist in output from {ip_address}")
+                    raise serializers.ValidationError("txid does not exist")
+                if not isinstance(utxo[0], bytes):
+                    logger.error(
+                        f"txid is not bytes in tx_body from {ip_address}")
+                    raise serializers.ValidationError("txid is not a bytes")
+                address = utxo[0].hex()
+                if address in banned_addresses:
+                    logger.error(f"{address} is banned")
+                    raise serializers.ValidationError("address is banned")
+
+        except KeyError:
+            logger.error(f"outputs do not exist in tx_body from {ip_address}")
 
         # check if collateral input is not in inputs
         being_spent_flag = False
         for utxo in inputs:
             if not isinstance(utxo, tuple):
                 logger.error(
-                    f"UTXO is not a tuple in tx_body from {ip_address}")
+                    f"utxo is not a tuple in inputs from {ip_address}")
                 raise serializers.ValidationError("utxo is not a tuple")
             try:
                 utxo[0]
             except IndexError:
                 logger.error(
-                    f"txid does not exist in tx_body from {ip_address}")
+                    f"txid does not exist in input from {ip_address}")
                 raise serializers.ValidationError("txid does not exist")
             if not isinstance(utxo[0], bytes):
-                logger.error(f"txid is not bytes in tx_body from {ip_address}")
+                logger.error(f"txid is not bytes in inputs from {ip_address}")
                 raise serializers.ValidationError("txid is not a bytes")
             try:
                 utxo[1]
             except IndexError:
                 logger.error(
-                    f"txidx does not exist in tx_body from {ip_address}")
+                    f"txidx does not exist in inputs from {ip_address}")
                 raise serializers.ValidationError("txidx does not exist")
             if not isinstance(utxo[1], int):
                 logger.error(
-                    f"txidx is not an int in tx_body from {ip_address}")
+                    f"txidx is not an int in inputs from {ip_address}")
                 raise serializers.ValidationError("txidx is not a int")
             # put it in proper format
             tx_id = utxo[0].hex()
@@ -136,7 +168,7 @@ class ProvideCollateralSerializer(serializers.Serializer):
                 break
         if being_spent_flag is True:
             logger.error(
-                f"Collateral is being spent in tx_body from {ip_address}")
+                f"collateral is being spent in tx_body from {ip_address}")
             raise serializers.ValidationError("collateral is being spent")
 
         # check if collateral inputs is correct form(13)
@@ -144,11 +176,11 @@ class ProvideCollateralSerializer(serializers.Serializer):
             collaterals = body[13]
         except KeyError:
             logger.error(
-                f"Collaterals do not exist in tx_body from {ip_address}")
+                f"collaterals do not exist in tx_body from {ip_address}")
             raise serializers.ValidationError("collaterals does not exist")
         if not isinstance(collaterals, set):
             logger.error(
-                f"Collaterals is not a set in tx_body from {ip_address}")
+                f"collaterals is not a set in tx_body from {ip_address}")
             raise serializers.ValidationError("collateral is not a set")
 
         # check if collateral input is in collateral inputs (13)
@@ -156,7 +188,7 @@ class ProvideCollateralSerializer(serializers.Serializer):
         for utxo in collaterals:
             if not isinstance(utxo, tuple):
                 logger.error(
-                    f"UTXO is not a tuple in collaterals from {ip_address}")
+                    f"utxo is not a tuple in collaterals from {ip_address}")
                 raise serializers.ValidationError("utxo is not a tuple")
             try:
                 utxo[0]
@@ -186,7 +218,7 @@ class ProvideCollateralSerializer(serializers.Serializer):
                 break
         if being_used_flag is False:
             logger.error(
-                f"Collateral is not being used in tx_body from {ip_address}")
+                f"collateral is not being used in tx_body from {ip_address}")
             raise serializers.ValidationError("collateral is not being used")
 
         # check if required signers is in correct form
@@ -194,7 +226,7 @@ class ProvideCollateralSerializer(serializers.Serializer):
             required_signers = body[14]
         except KeyError:
             logger.error(
-                f"Required signers do not exist in tx_body from {ip_address}")
+                f"required signers do not exist in tx_body from {ip_address}")
             raise serializers.ValidationError(
                 "required signers does not exist")
         if not isinstance(required_signers, set):
@@ -207,14 +239,14 @@ class ProvideCollateralSerializer(serializers.Serializer):
         for signer in required_signers:
             if not isinstance(signer, bytes):
                 logger.error(
-                    f"Signer is not bytes in required signers from {ip_address}")
+                    f"signer is not bytes in required signers from {ip_address}")
                 raise serializers.ValidationError("signer is not a bytes")
             if signer.hex() == settings.PKH:
                 being_signed_flag = True
                 break
         if being_signed_flag is False:
             logger.error(
-                f"Public key hash is not being used in tx_body from {ip_address}")
+                f"public key hash is not being used in tx_body from {ip_address}")
             raise serializers.ValidationError(
                 "public key hash is not being used")
 
@@ -225,11 +257,11 @@ class ProvideCollateralSerializer(serializers.Serializer):
             is_valid['result']['EvaluationResult']
         except KeyError:
             logger.error(
-                f"Transaction fails validation for request from {ip_address}")
+                f"transaction fails validation for request from {ip_address}")
             raise serializers.ValidationError("transaction fails validation")
 
         logger.info(
-            f"Successfully validated tx_body for request from {ip_address}")
+            f"successfully validated tx_body for request from {ip_address}")
 
         # At this point collateral is not being spent, it's in the collateral inputs,
         # and the pkh is being used to sign the tx

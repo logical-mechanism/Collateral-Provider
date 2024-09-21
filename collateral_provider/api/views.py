@@ -6,7 +6,7 @@ import os
 import tempfile
 
 from django.conf import settings
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect
 from rest_framework import status, throttling
 from rest_framework.response import Response
@@ -139,6 +139,10 @@ def landing_page(request):
                 <a href="https://github.com/logical-mechanism/Collateral-Provider?tab=readme-ov-file#example-use" target="_blank" rel="noopener noreferrer">
                     View Github For Example Use
                 </a>
+                <br/>
+                <a href="/known_hosts/">
+                    View Known Collateral Providers
+                </a>
             </body>
         </html>
     """)
@@ -160,3 +164,8 @@ def known_hosts_view(request):
         return JsonResponse({'error': 'File not found'}, status=404)
     # Return the JSON response
     return JsonResponse(data)
+
+
+def custom_disallowed_host_handler(request, exception):
+    logger.warning(f"DisallowedHost: {request.get_host()}")
+    return HttpResponseBadRequest("Invalid Host Header")

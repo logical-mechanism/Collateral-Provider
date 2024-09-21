@@ -5,7 +5,8 @@
         "id": "",
         "idx": 0
       },
-      "url": ""
+      "url": "",
+      "onion": ""
     }
   },
   "7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4": {
@@ -14,16 +15,18 @@
         "id": "1d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f",
         "idx": 0
       },
-      "url": "https://www.giveme.my/preprod/collateral/"
+      "url": "https://www.giveme.my/preprod/collateral/",
+      "onion": ""
     }
   },
-  "efac7006bfd7a40966142ff2a0f4ede13da67ff35cce4166c6f4e051": {
+  "c59da4ec6e515c2efc8866274dee6ac9a64b5945efd365f3a999e760": {
     "preprod": {
       "utxo": {
         "id": "68333201e493dd41b848bd742151c31060a749a49bc48d0b09541bcc840ac0c9",
         "idx": 0
       },
-      "url": "http://127.0.0.1:8000/preprod/collateral/"
+      "url": "http://127.0.0.1:8000/preprod/collateral/",
+      "onion": ""
     }
   }
 }
