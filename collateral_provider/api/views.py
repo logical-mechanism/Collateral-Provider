@@ -26,6 +26,16 @@ class ProvideCollateralThrottle(throttling.AnonRateThrottle):
 class ProvideCollateralView(APIView):
     throttle_classes = [ProvideCollateralThrottle]
 
+    def http_method_not_allowed(self, request, *args, **kwargs):
+        ip_address = self.get_client_ip(request)
+
+        logger.info(f'Get request received from {ip_address}')
+        logger.warning(f"Method not allowed: {request.method} on {request.path}")
+        return Response(
+            {"detail": "Method not allowed."},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED
+        )
+
     def post(self, request, environment):
         # Get client's IP address
         ip_address = self.get_client_ip(request)
@@ -85,10 +95,10 @@ class ProvideCollateralView(APIView):
                 logger.error(
                     f'Error processing witness for {ip_address}: {str(e)}')
                 return Response({"error": "Failed to process the witness."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-            # Remove temporary files
-            os.remove(tx_draft_file_path)
-            os.remove(tx_witness_file_path)
+            finally:
+                # Remove temporary files
+                os.remove(tx_draft_file_path)
+                os.remove(tx_witness_file_path)
 
             logger.info(
                 f'Successfully processed witness for {ip_address} and environment {environment}')
