@@ -28,7 +28,6 @@ class ProvideCollateralView(APIView):
 
     def http_method_not_allowed(self, request, *args, **kwargs):
         ip_address = self.get_client_ip(request)
-
         logger.info(f'Get request received from {ip_address}')
         logger.warning(f"Method not allowed: {request.method} on {request.path}")
         return Response(
