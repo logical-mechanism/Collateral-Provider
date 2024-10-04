@@ -1,5 +1,3 @@
-# api/serializers.py
-
 import logging
 
 import cbor2
@@ -264,5 +262,5 @@ class ProvideCollateralSerializer(serializers.Serializer):
             f"successfully validated tx_body for request from {ip_address}")
 
         # At this point collateral is not being spent, it's in the collateral inputs,
-        # and the pkh is being used to sign the tx
+        # the pkh is being used to sign the tx, and the tx is valid.
         return tx_body_cbor

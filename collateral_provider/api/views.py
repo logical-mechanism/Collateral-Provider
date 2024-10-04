@@ -1,5 +1,3 @@
-# api/views.py
-
 import json
 import logging
 import os

@@ -14,9 +14,10 @@ environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 PKH = env('PKH')
 CLI_PATH = os.path.join(BASE_DIR, 'api/bin/cardano-cli')
 KEY_PATH = os.path.join(BASE_DIR, 'api/key/payment.skey')
-SECRET_KEY = env('SECRET_KEY')
+SECRET_KEY = env('DJANGO_SECRET_KEY')
 ENVIRONMENT = env('ENVIRONMENT')
 
+# uncomment the networks being used
 ENVIRONMENTS = {
     # 'preview': {
     #     'PROJECT_ID': env('PREVIEW_PROJECT_ID'),
