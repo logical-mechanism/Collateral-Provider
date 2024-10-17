@@ -1,12 +1,12 @@
 {
   "$pkh": {
     "$network": {
-      "utxo": {
-        "id": "",
-        "idx": 0
+      "$utxo": {
+        "$id": "",
+        "$idx": 0
       },
-      "url": "",
-      "onion": ""
+      "$url": "",
+      "$onion": ""
     }
   },
   "7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4": {
