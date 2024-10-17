@@ -163,10 +163,10 @@ LOGGING = {
 # Production-specific settings
 if ENVIRONMENT == 'production':
     # Enforce HTTPS
-    SECURE_SSL_REDIRECT = True
+    SECURE_SSL_REDIRECT = False
 
     # HSTS to enforce HTTPS in browsers
-    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_SECONDS = 0  # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
 

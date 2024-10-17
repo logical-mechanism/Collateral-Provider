@@ -14,6 +14,8 @@ class HandleDisallowedHostMiddleware:
     def __call__(self, request):
         host = request.META.get('HTTP_HOST')
         host = host.split(':')[0]
+        # logger.debug(f"Host: {host}")
+        # logger.debug(f"{settings.ALLOWED_HOSTS}")
         if host and host not in settings.ALLOWED_HOSTS:
             logger.warning(f"DisallowedHost: Invalid Host - {host}")
             return HttpResponseBadRequest("Invalid Host Header")
