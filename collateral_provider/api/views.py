@@ -18,6 +18,7 @@ logger = logging.getLogger('api')
 
 class ProvideCollateralThrottle(throttling.AnonRateThrottle):
     # set this to whatever makes sense
+    # the real limit here is the blockfrost simulate api
     rate = '60/min'
 
 
