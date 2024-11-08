@@ -27,3 +27,34 @@ def evaluate_tx(tx_body_cbor_hex, environment, project_id):
 
     # Return the JSON response
     return response.json()
+
+
+def evaluate_transaction(tx_body_cbor_hex, environment):
+    # Set up the payload for the POST request
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "evaluateTransaction",
+        "params": {
+            "transaction": {
+                "cbor": tx_body_cbor_hex
+            }
+        }
+    }
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json"
+    }
+
+    # Send the POST request
+    prefix = "api" if environment == "mainnet" else environment
+    response = requests.post(f"https://{prefix}.koios.rest/api/v1/ogmios", headers=headers, json=payload)
+
+    # Check for HTTP errors
+    try:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        # You can add more detailed error handling here if needed
+        raise e
+
+    # Return the result of the evaluation
+    return response.json()
