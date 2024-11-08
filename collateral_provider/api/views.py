@@ -18,7 +18,8 @@ logger = logging.getLogger('api')
 
 class ProvideCollateralThrottle(throttling.AnonRateThrottle):
     # set this to whatever makes sense
-    rate = '1/min'
+    # the real limit here is the simulate api
+    rate = '60/min'
 
 
 class ProvideCollateralView(APIView):
