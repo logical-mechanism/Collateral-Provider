@@ -42,6 +42,7 @@ class ProvideCollateralView(APIView):
             f'Request received from {ip_address} for environment: {environment}')
 
         # Check if the environment is valid
+        networks = list(settings.ENVIRONMENTS.keys())
         env_settings = settings.ENVIRONMENTS.get(environment)
         if not env_settings:
             logger.warning(
@@ -55,6 +56,7 @@ class ProvideCollateralView(APIView):
                 'environment': environment,
                 'env_settings': env_settings,
                 'ip_address': ip_address,
+                'networks': networks,
             }
         )
 

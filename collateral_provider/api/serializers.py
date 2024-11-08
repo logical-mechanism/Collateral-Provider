@@ -4,14 +4,16 @@ import cbor2
 from django.conf import settings
 from rest_framework import serializers
 
-from .ban_list import banned_addresses, banned_ip_address
-from .simulate import evaluate_tx
+from .ban_list import banned_addresses
+from .simulate import evaluate_transaction
+from .validators.environment import EnvironmentValidator
 
 # Initialize the logger
 logger = logging.getLogger('api')
 
 
 class ProvideCollateralSerializer(serializers.Serializer):
+
     tx_body = serializers.CharField(
         allow_blank=False,    # Prevent empty strings
         trim_whitespace=True  # Automatically strip leading/trailing whitespaces
@@ -22,18 +24,13 @@ class ProvideCollateralSerializer(serializers.Serializer):
         environment = self.context.get('environment')
         env_settings = self.context.get('env_settings')
         ip_address = self.context.get('ip_address')
+        networks = self.context.get('networks')
 
-        logger.info(f"validating tx_body for request from {ip_address}")
+        logger.debug(f"validating tx_body for request from {ip_address}")
 
-        if ip_address in banned_ip_address:
-            logger.error(
-                f"{ip_address} is banned")
-            raise serializers.ValidationError("ip address is banned")
-
-        if environment not in ['preprod', 'mainnet']:
-            logger.error(
-                f"invalid environment {environment} from {ip_address}")
-            raise serializers.ValidationError("wrong environment")
+        env_validator = EnvironmentValidator(logger)
+        env_validator.check_ip_address(ip_address)
+        env_validator.check_environment(environment, networks)
 
         # Ensure tx_body is not just whitespace after trimming
         if not tx_body_cbor:
@@ -249,16 +246,15 @@ class ProvideCollateralSerializer(serializers.Serializer):
                 "public key hash is not being used")
 
         # Do a tx validation here
-        is_valid = evaluate_tx(tx_body_cbor, environment,
-                               env_settings['PROJECT_ID'])
+        is_valid = evaluate_transaction(tx_body_cbor, environment)
         try:
-            is_valid['result']['EvaluationResult']
+            is_valid['result']
         except KeyError:
             logger.error(
                 f"transaction fails validation for request from {ip_address}")
             raise serializers.ValidationError("transaction fails validation")
 
-        logger.info(
+        logger.debug(
             f"successfully validated tx_body for request from {ip_address}")
 
         # At this point collateral is not being spent, it's in the collateral inputs,
