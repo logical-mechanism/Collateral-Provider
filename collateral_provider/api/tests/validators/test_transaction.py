@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import Mock
 
-from requests.exceptions import HTTPError
 from rest_framework.exceptions import ValidationError
 
 from api.validators.transaction import TransactionValidator
