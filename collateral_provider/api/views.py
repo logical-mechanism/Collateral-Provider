@@ -27,8 +27,7 @@ class ProvideCollateralView(APIView):
 
     def http_method_not_allowed(self, request, *args, **kwargs):
         ip_address = self.get_client_ip(request)
-        logger.info(f'Get request received from {ip_address}')
-        logger.warning(f"Method not allowed: {request.method} on {request.path}")
+        logger.warning(f'Get request received from {ip_address} Method not allowed: {request.method} on {request.path}')
         return Response(
             {"detail": "Method not allowed."},
             status=status.HTTP_405_METHOD_NOT_ALLOWED
@@ -38,14 +37,13 @@ class ProvideCollateralView(APIView):
         # Get client's IP address
         ip_address = self.get_client_ip(request)
 
-        logger.info(
-            f'Request received from {ip_address} for environment: {environment}')
+        logger.debug(f'Request received from {ip_address} for environment: {environment}')
 
         # Check if the environment is valid
+        networks = list(settings.ENVIRONMENTS.keys())
         env_settings = settings.ENVIRONMENTS.get(environment)
         if not env_settings:
-            logger.warning(
-                f'Invalid environment "{environment}" from {ip_address}')
+            logger.error(f'Invalid environment "{environment}" from {ip_address}')
             return Response({"error": "Invalid environment specified."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Log the incoming request data
@@ -55,13 +53,12 @@ class ProvideCollateralView(APIView):
                 'environment': environment,
                 'env_settings': env_settings,
                 'ip_address': ip_address,
+                'networks': networks,
             }
         )
 
         if serializer.is_valid():
             tx_body_cbor = serializer.validated_data['tx_body']
-            logger.info(
-                f'Valid data received from {ip_address} for environment {environment}')
 
             # Temporary files for tx draft and witness
             with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tx_draft:
@@ -77,8 +74,7 @@ class ProvideCollateralView(APIView):
                 tx_witness_file_path = tx_witness.name
 
             # Witness the transaction
-            witness(tx_draft_file_path, tx_witness_file_path,
-                    env_settings['NETWORK'], settings.KEY_PATH, settings.CLI_PATH)
+            witness(tx_draft_file_path, tx_witness_file_path, env_settings['NETWORK'], settings.KEY_PATH, settings.CLI_PATH)
 
             # Get the cborHex of the witness
             try:
@@ -86,27 +82,23 @@ class ProvideCollateralView(APIView):
                     witness_data = json.load(temp_file)
                 witness_cbor = witness_data['cborHex']
             except KeyError as e:
-                logger.error(
-                    f'Missing cborHex in witness data for {ip_address}')
+                logger.error(f'Missing cborHex in witness data for {ip_address}')
                 return Response(e, status=status.HTTP_400_BAD_REQUEST)
             except Exception as e:
-                logger.error(
-                    f'Error processing witness for {ip_address}: {str(e)}')
+                logger.error(f'Error processing witness for {ip_address}: {str(e)}')
                 return Response({"error": "Failed to process the witness."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             finally:
                 # Remove temporary files
                 os.remove(tx_draft_file_path)
                 os.remove(tx_witness_file_path)
 
-            logger.info(
-                f'Successfully processed witness for {ip_address} and environment {environment}')
+            logger.debug(f'Successfully processed witness for {ip_address} and environment {environment}')
 
             # Return the witness data
             return Response({'witness': witness_cbor}, status=status.HTTP_200_OK)
 
         else:
-            logger.warning(
-                f'Invalid data from {ip_address}: {serializer.errors}')
+            logger.error(f'Invalid data from {ip_address}: {serializer.errors}')
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def get_client_ip(self, request):

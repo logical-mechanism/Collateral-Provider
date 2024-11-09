@@ -19,20 +19,22 @@ ENVIRONMENT = env('ENVIRONMENT')
 
 # uncomment the networks being used
 ENVIRONMENTS = {
+    # 'sancho': {
+    #     'NETWORK': env("SANCHO_NETWORK"),
+    #     'TXID': env('SANCHO_TXID'),
+    #     'TXIDX': env.int('SANCHO_TXIDX'),
+    # },
     # 'preview': {
-    #     'PROJECT_ID': env('PREVIEW_PROJECT_ID'),
     #     'NETWORK': env("PREVIEW_NETWORK"),
     #     'TXID': env('PREVIEW_TXID'),
     #     'TXIDX': env.int('PREVIEW_TXIDX'),
     # },
     'preprod': {
-        'PROJECT_ID': env('PREPROD_PROJECT_ID'),
         'NETWORK': env("PREPROD_NETWORK"),
         'TXID': env('PREPROD_TXID'),
         'TXIDX': env.int('PREPROD_TXIDX'),
     },
     # 'mainnet': {
-    #     'PROJECT_ID': env('MAINNET_PROJECT_ID'),
     #     'NETWORK': env("MAINNET_NETWORK"),
     #     'TXID': env('MAINNET_TXID'),
     #     'TXIDX': env.int('MAINNET_TXIDX'),
@@ -107,6 +109,7 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.AnonRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
+        # keep this at 1 as the worst case fallback
         'anon': '1/min',
     }
 }
