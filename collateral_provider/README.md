@@ -1,3 +1,23 @@
+## Testing
+
+Enter into the `collateral_provider` folder.
+
+```bash
+cd collateral_provider
+```
+
+Run tests with:
+
+```bash
+python3 manage.py test
+```
+
+Run the server with:
+
+```bash
+python3 manage.py runserver
+```
+
 ### local testing query
 
 This is just for testing locally
