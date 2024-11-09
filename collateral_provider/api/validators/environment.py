@@ -1,5 +1,3 @@
-# validators/environment.py
-
 from api.ban_list import banned_ip_address
 from api.util import log_and_raise_error
 
