@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 
 import environ
@@ -7,8 +8,15 @@ import environ
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Initialize environment variables
+env_file = os.path.join(BASE_DIR, '.env')
+
+# Check if the .env file exists
+if not os.path.exists(env_file):
+    print(f"Error: .env file is missing at {env_file}. Exiting.")
+    sys.exit(1)  # Exit the application with a non-zero status code
+
 env = environ.Env()
-environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
+environ.Env.read_env(env_file)
 
 # Add your variables here
 PKH = env('PKH')
