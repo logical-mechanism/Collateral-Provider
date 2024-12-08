@@ -36,7 +36,6 @@ class ProvideCollateralView(APIView):
     def post(self, request, environment):
         # Get client's IP address
         ip_address = self.get_client_ip(request)
-
         logger.debug(f'Request received from {ip_address} for environment: {environment}')
 
         # Check if the environment is valid
@@ -46,7 +45,7 @@ class ProvideCollateralView(APIView):
             logger.error(f'Invalid environment "{environment}" from {ip_address}')
             return Response({"error": "Invalid environment specified."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Log the incoming request data
+        # Serialize the incoming data
         serializer = ProvideCollateralSerializer(
             data=request.data,
             context={
@@ -57,10 +56,11 @@ class ProvideCollateralView(APIView):
             }
         )
 
+        # If its valid then witness the transaction
         if serializer.is_valid():
             tx_body_cbor = serializer.validated_data['tx_body']
 
-            # Temporary files for tx draft and witness
+            # Temporary files for tx draft
             with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tx_draft:
                 tx_body_content = {
                     "type": "Unwitnessed Tx ConwayEra",
@@ -70,6 +70,7 @@ class ProvideCollateralView(APIView):
                 json.dump(tx_body_content, tx_draft)
                 tx_draft_file_path = tx_draft.name
 
+            # Temporary files for tx witness
             with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tx_witness:
                 tx_witness_file_path = tx_witness.name
 
@@ -173,7 +174,6 @@ def landing_page(request):
                 </footer>
             </body>
         </html>
-
     """)
 
 
