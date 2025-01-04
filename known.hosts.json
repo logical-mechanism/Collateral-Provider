@@ -19,6 +19,14 @@
       "url": "https://www.giveme.my/preprod/collateral/",
       "onion": "http://fjy3v62j7vqytvtviixsbixcmgyxgfolb7pg5bb3vcozxn4rrlu7z6ad.onion/preprod/collateral/"
     },
+    "mainnet": {
+      "utxo": {
+        "id": "e62351eacbdd001aee77a91805840d2b81f77feebbf2439fb01b79e76c42c839",
+        "idx": 0
+      },
+      "url": "https://www.giveme.my/mainnet/collateral/",
+      "onion": "http://fjy3v62j7vqytvtviixsbixcmgyxgfolb7pg5bb3vcozxn4rrlu7z6ad.onion/mainnet/collateral/"
+    },
     "public_key": "fa2025e788fae01ce10deffff386f992f62a311758819e4e3792887396c171ba"
   },
   "c59da4ec6e515c2efc8866274dee6ac9a64b5945efd365f3a999e760": {
