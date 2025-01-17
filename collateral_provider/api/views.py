@@ -27,23 +27,23 @@ class ProvideCollateralView(APIView):
 
     def http_method_not_allowed(self, request, *args, **kwargs):
         ip_address = self.get_client_ip(request)
-        logger.warning(f'Get request received from {ip_address} Method not allowed: {request.method} on {request.path}')
+        logger.warning(f'Get Request Received From IP: {ip_address} Method Not Allowed: {request.method} On {request.path}')
         return Response(
-            {"detail": "Method not allowed."},
+            {"detail": "Method Not Allowed"},
             status=status.HTTP_405_METHOD_NOT_ALLOWED
         )
 
     def post(self, request, environment):
         # Get client's IP address
         ip_address = self.get_client_ip(request)
-        logger.debug(f'Request received from {ip_address} for environment: {environment}')
+        logger.debug(f'Request Received From IP: {ip_address} For Environment: {environment}')
 
         # Check if the environment is valid
         networks = list(settings.ENVIRONMENTS.keys())
         env_settings = settings.ENVIRONMENTS.get(environment)
         if not env_settings:
-            logger.error(f'Invalid environment "{environment}" from {ip_address}')
-            return Response({"error": "Invalid environment specified."}, status=status.HTTP_400_BAD_REQUEST)
+            logger.error(f'Invalid Environment {environment} From IP: {ip_address}')
+            return Response({"error": "Invalid Environment"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Serialize the incoming data
         serializer = ProvideCollateralSerializer(
@@ -83,23 +83,23 @@ class ProvideCollateralView(APIView):
                     witness_data = json.load(temp_file)
                 witness_cbor = witness_data['cborHex']
             except KeyError as e:
-                logger.error(f'Missing cborHex in witness data for {ip_address}')
+                logger.error(f'Missing cborHex In Witness Data For IP: {ip_address}')
                 return Response(e, status=status.HTTP_400_BAD_REQUEST)
             except Exception as e:
-                logger.error(f'Error processing witness for {ip_address}: {str(e)}')
-                return Response({"error": "Failed to process the witness."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                logger.error(f'Error Processing Witness For: {ip_address}: {str(e)}')
+                return Response({"error": "Failed To Process The Tx Witness"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             finally:
                 # Remove temporary files
                 os.remove(tx_draft_file_path)
                 os.remove(tx_witness_file_path)
 
-            logger.debug(f'Successfully processed witness for {ip_address} and environment {environment}')
+            logger.debug(f'Successfully Processed Tx Witness For IP: {ip_address} On Environment: {environment}')
 
             # Return the witness data
             return Response({'witness': witness_cbor}, status=status.HTTP_200_OK)
 
         else:
-            logger.error(f'Invalid data from {ip_address}: {serializer.errors}')
+            logger.error(f'Invalid Data From IP: {ip_address}: {serializer.errors}')
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def get_client_ip(self, request):
@@ -170,7 +170,7 @@ def landing_page(request):
                     </section>
                 </main>
                 <footer>
-                    <p>Created By Logical Mechanism LLC</p>
+                    <p>Created By Logical Mechanism LLC With ❤️</p>
                 </footer>
             </body>
         </html>
@@ -190,7 +190,7 @@ def known_hosts_view(request):
         with open(json_file_path, 'r') as json_file:
             data = json.load(json_file)
     except FileNotFoundError:
-        return JsonResponse({'error': 'File not found'}, status=404)
+        return JsonResponse({'error': 'File Not Found'}, status=404)
     # Return the JSON response
     return JsonResponse(data)
 

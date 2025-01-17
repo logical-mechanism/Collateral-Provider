@@ -11,4 +11,4 @@ class TransactionValidator:
         try:
             is_valid['result']
         except KeyError:
-            log_and_raise_error(self.logger, "transaction fails validation")
+            log_and_raise_error(self.logger, "Transaction Fails Validation")

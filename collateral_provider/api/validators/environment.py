@@ -8,8 +8,8 @@ class EnvironmentValidator:
 
     def check_ip_address(self, ip_address):
         if ip_address in banned_ip_address:
-            log_and_raise_error(self.logger, f"{ip_address} is banned")
+            log_and_raise_error(self.logger, f"The IP: {ip_address} Is Banned")
 
     def check_environment(self, environment, networks):
         if environment not in networks:
-            log_and_raise_error(self.logger, f"Invalid environment: {environment}")
+            log_and_raise_error(self.logger, f"Invalid Environment: {environment}")
