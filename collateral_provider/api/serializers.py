@@ -25,7 +25,7 @@ class ProvideCollateralSerializer(serializers.Serializer):
         ip_address = self.context.get('ip_address')
         networks = self.context.get('networks')
 
-        logger.debug(f"validating tx_body for request from {ip_address}")
+        logger.debug(f"Validating Tx Body From {ip_address}")
 
         env_validator = EnvironmentValidator(logger)
         env_validator.check_ip_address(ip_address)

@@ -21,7 +21,7 @@ class HandleDisallowedHostMiddleware:
                 return HttpResponseBadRequest("Invalid Host Header")
         else:
             # Log a message or handle as appropriate if HTTP_HOST is missing
-            logger.warning("DisallowedHost: Missing HTTP_HOST header")
+            logger.warning("DisallowedHost: Missing HTTP_HOST Header")
             return HttpResponseBadRequest("Invalid Host Header")
 
         # Try to handle the response within the context of the request
@@ -34,5 +34,5 @@ class HandleDisallowedHostMiddleware:
             return HttpResponseBadRequest("Invalid Host Header")
         except Exception as e:
             # Optionally catch any other exceptions
-            logger.error(f"Unexpected error: {str(e)}")
-            return HttpResponseBadRequest("An error occurred.")
+            logger.error(f"Unexpected Error: {str(e)}")
+            return HttpResponseBadRequest("An Error Occurred")
