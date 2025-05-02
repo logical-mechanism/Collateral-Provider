@@ -20,3 +20,4 @@ def witness(draft_file_path: str, witnessed_file_path: str, network: str, skey_p
 
     p = subprocess.Popen(func, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     _, _ = p.communicate()
+
