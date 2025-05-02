@@ -43,7 +43,6 @@ from pycardano.serialization import (
     OrderedSet,
 )
 
-
 def get_key_from_file(file_path: str) -> str:
     """
     Reads a key from a JSON file and returns the hexadecimal key value.
@@ -83,23 +82,6 @@ def sign(skey: str, msg: str) -> str:
     # Sign the message using the private key and return the signature in hex
     signature = sk.sign(msg)
     return signature.hex()
-
-
-def cli_key_signature(skey_path: str, msg: str) -> str:
-    """
-    Signs a message using a private key from a JSON file.
-
-    Args:
-        skey_path (str): The path to the JSON file containing the private key.
-        msg (str): The message to be signed in hexadecimal format.
-
-    Returns:
-        str: The signature of the message in hexadecimal format.
-    """
-    # Extract the private key from the file
-    sk = get_key_from_file(skey_path)
-    # Sign the message using the extracted private key
-    return sign(sk, msg)
 
 
 def verify(vkey: str, signature: str, msg: str) -> bool:
@@ -170,7 +152,7 @@ def tx_id(tx_cbor: str) -> str:
     return hashlib.blake2b(binascii.unhexlify(tx_body_cbor), digest_size=32).hexdigest()
 
 
-def witness(public_key: str, signature: str) -> str:
+def create_witness_cbor(public_key: str, signature: str) -> str:
     """
     Creates a valid witness to a transaction in CBOR.
 
@@ -184,3 +166,24 @@ def witness(public_key: str, signature: str) -> str:
     return cbor2.dumps(
         [0, [binascii.unhexlify(public_key), binascii.unhexlify(signature)]]
     ).hex()
+
+def witness_tx_cbor(tx_cbor: str, skey_path: str, vkey_path) -> str:
+    """
+    Create the witness CBOR given the tx CBOR, the skey, and the vkey paths.
+
+    Args:
+        tx_cbor (str): The transaction CBOR from the API.
+        skey_path (str): The CLI secret key path.
+        vkey_path (str): The CLI verification key path.
+
+    Returns:
+        witness_cbor (str): The CBOR of a valid witness
+    """
+    # get the keys
+    sk = get_key_from_file(skey_path)
+    pk = get_key_from_file(vkey_path)
+    # get the has
+    tx_hash = tx_id(tx_cbor)
+    # sign and create the witness
+    sig = sign(sk, tx_hash)
+    return create_witness_cbor(pk, sig)

@@ -1,6 +1,6 @@
 # api/tests.py
 from django.test import TestCase
-from api.signature import verify, sign, tx_id, witness
+from api.signature import verify, sign, tx_id, create_witness_cbor
 from api.tests.test_data import valid_tx_body_cbor_with_collateral, invalid_tx_body_missing_collateral
 
 class SignatureTestCase(TestCase):
@@ -39,7 +39,7 @@ class SignatureTestCase(TestCase):
     def test_create_proper_witness(self):
         pk = "FA2025E788FAE01CE10DEFFFF386F992F62A311758819E4E3792887396C171BA"
         sig = "F79613A21B87E80F8FFF4FA6E878C58186381BA10C46F7B4569A9183EF9FD077AD844F88DDBBE9285FAA9FEBBF3EACBB41338B9889FF82B6252139279FB53C07"
-        outcome = witness(pk, sig)
+        outcome = create_witness_cbor(pk, sig)
         witness_cbor = "8200825820fa2025e788fae01ce10deffff386f992f62a311758819e4e3792887396c171ba5840f79613a21b87e80f8fff4fa6e878c58186381ba10c46f7b4569a9183ef9fd077ad844f88ddbbe9285faa9febbf3eacbb41338b9889ff82b6252139279fb53c07"
         self.assertEqual(outcome, witness_cbor)
     
@@ -48,7 +48,7 @@ class SignatureTestCase(TestCase):
         sk = "abffdc040fd4c5d3eb6ce962a968f57995edfb33c78a11a466446a649f3ed82c"
         pk = "51c20cf4a8ed0e13cd65026625fe59d7ee8f8ef274a3d5575f8c30f9732cb3ed"
         sig = sign(sk, tx_hash)
-        witness_cbor = witness(pk, sig)
+        witness_cbor = create_witness_cbor(pk, sig)
         answer = "820082582051c20cf4a8ed0e13cd65026625fe59d7ee8f8ef274a3d5575f8c30f9732cb3ed584077589916b53ea6abfb4e9793770bf5fbb0bbe153046e12b91365832f2c1558aec34dcf8544b15fbdd1946b32b10b38dfa70defaeb827d98a4f959539000df502"
         self.assertEqual(witness_cbor, answer)
 

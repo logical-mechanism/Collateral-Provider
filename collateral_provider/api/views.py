@@ -75,7 +75,7 @@ class ProvideCollateralView(APIView):
                 tx_witness_file_path = tx_witness.name
 
             # Witness the transaction
-            witness(tx_draft_file_path, tx_witness_file_path, env_settings['NETWORK'], settings.KEY_PATH, settings.CLI_PATH)
+            witness(tx_draft_file_path, tx_witness_file_path, env_settings['NETWORK'], settings.SKEY_PATH, settings.CLI_PATH)
 
             # Get the cborHex of the witness
             try:
