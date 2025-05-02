@@ -42,11 +42,11 @@ ENVIRONMENTS = {
         'TXID': env('PREPROD_TXID'),
         'TXIDX': env.int('PREPROD_TXIDX'),
     },
-    # 'mainnet': {
-    #     'NETWORK': env("MAINNET_NETWORK"),
-    #     'TXID': env('MAINNET_TXID'),
-    #     'TXIDX': env.int('MAINNET_TXIDX'),
-    # },
+    'mainnet': {
+        'NETWORK': env("MAINNET_NETWORK"),
+        'TXID': env('MAINNET_TXID'),
+        'TXIDX': env.int('MAINNET_TXIDX'),
+    },
 }
 
 # False is production
