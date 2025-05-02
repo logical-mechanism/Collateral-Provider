@@ -27,16 +27,6 @@ ENVIRONMENT = env('ENVIRONMENT')
 
 # uncomment the networks being used
 ENVIRONMENTS = {
-    # 'sancho': {
-    #     'NETWORK': env("SANCHO_NETWORK"),
-    #     'TXID': env('SANCHO_TXID'),
-    #     'TXIDX': env.int('SANCHO_TXIDX'),
-    # },
-    # 'preview': {
-    #     'NETWORK': env("PREVIEW_NETWORK"),
-    #     'TXID': env('PREVIEW_TXID'),
-    #     'TXIDX': env.int('PREVIEW_TXIDX'),
-    # },
     'preprod': {
         'NETWORK': env("PREPROD_NETWORK"),
         'TXID': env('PREPROD_TXID'),
@@ -149,8 +139,8 @@ LOGGING = {
             'class': 'logging.handlers.RotatingFileHandler',
             'filename': os.path.join(BASE_DIR, 'debug.log'),
             'formatter': 'verbose',
-            'maxBytes': 1024 * 1024 * 5,  # 5 MB
-            'backupCount': 5,  # Keep 3 backup files
+            'maxBytes': 1024 * 1024 * 1,
+            'backupCount': 3,
         },
     },
     'loggers': {
@@ -198,3 +188,4 @@ STATIC_URL = '/static/'
 STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'static'),  # This is your static folder
 ]
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
