@@ -1,11 +1,11 @@
 from api.views import (ProvideCollateralView, custom_disallowed_host_handler,
                        custom_page_not_found, known_hosts_view, landing_page)
-from django.urls import path
+from django.urls import path, re_path
 
 urlpatterns = [
     path('', landing_page, name='landing_page'),
-    path('<str:environment>/collateral/', ProvideCollateralView.as_view(), name='collateral'),
-    path('known_hosts/', known_hosts_view, name='known_hosts'),
+    re_path(r'^(?P<environment>[^/]+)/collateral/?$', ProvideCollateralView.as_view(), name='collateral'),
+    re_path(r'^known_hosts/?$', known_hosts_view, name='known_hosts'),
 ]
 
 handler404 = custom_page_not_found
