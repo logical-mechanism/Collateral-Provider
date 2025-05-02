@@ -34,11 +34,9 @@ import json
 import hashlib
 import binascii
 import cbor2
-from ecdsa import (
-    Ed25519,
-    SigningKey,
-    VerifyingKey,
-)  # This module is vulnerable to side-channel attacks
+from nacl.signing import SigningKey, VerifyKey
+from nacl.exceptions import BadSignatureError
+from nacl.encoding import RawEncoder
 from pycardano.serialization import (
     OrderedSet,
 )
@@ -75,13 +73,11 @@ def sign(skey: str, msg: str) -> str:
         str: The generated signature in hexadecimal format.
     """
     # Convert the private key and message from hex to bytes
-    sk_string = bytes.fromhex(skey)
-    sk = SigningKey.from_string(sk_string, curve=Ed25519)
-    msg = bytes.fromhex(msg)
-
-    # Sign the message using the private key and return the signature in hex
-    signature = sk.sign(msg)
-    return signature.hex()
+    sk_bytes = bytes.fromhex(skey)
+    msg_bytes = bytes.fromhex(msg)
+    signing_key = SigningKey(sk_bytes)
+    sig = signing_key.sign(msg_bytes, encoder=RawEncoder).signature.hex()
+    return sig
 
 
 def verify(vkey: str, signature: str, msg: str) -> bool:
@@ -97,13 +93,16 @@ def verify(vkey: str, signature: str, msg: str) -> bool:
         bool: True if the signature is valid, False otherwise.
     """
     # Convert the public key, signature, and message from hex to bytes
-    vk_string = bytes.fromhex(vkey)
-    vk = VerifyingKey.from_string(vk_string, curve=Ed25519)
-    signature = bytes.fromhex(signature)
-    msg = bytes.fromhex(msg)
+    vk_bytes = bytes.fromhex(vkey)
+    sig_bytes = bytes.fromhex(signature)
+    msg_bytes = bytes.fromhex(msg)
 
-    # Verify if the signature matches the message using the public key
-    return vk.verify(signature, msg)
+    verify_key = VerifyKey(vk_bytes, encoder=RawEncoder)
+    try:
+        verify_key.verify(msg_bytes, sig_bytes, encoder=RawEncoder)
+        return True
+    except BadSignatureError:
+        return False
 
 
 def tx_id(tx_cbor: str) -> str:
