@@ -1,35 +1,3 @@
-# This will allow a CLI key to sign data. The CLI key is a cbor encoded Ed25519
-# key. So to use verify_ed25519_signature we need to do the math on the decoded
-# cbor value. This is fine since python has the ecdsa module that does it for us.
-#
-# ECDSA in multiplicative form (Blake et al. Elliptic Curves in Cryptography - I.1.4):
-#
-# g is the generator for ed25519
-#
-# x is the secret key, sk in the code
-# g^x = h, h is the verification key, vk in the code
-# m is the public msg, msg in the code
-#
-# k is a random integer
-#
-# Signing:
-#
-# a = g^k
-#
-# b = (m + a * x) * k^(-1)
-#
-# Signature is (a, b)
-#
-# Verify (a, b):
-#
-# g^(m * b^(-1)) * h^(a * b^(-1)) ?= a
-#
-# This is why we pass in msg, sig, and vkey in the verify_ed25519_signature function.
-#
-# Proof:
-# g^(m * b^(-1)) * h^(a * b^(-1)) = g^(m * b^(-1)) * g^(x * a * b^(-1)) = g^[(m + a * x)*b^(-1)] = g^(k * b^(-1) * b) = g^k = a
-#
-
 import json
 import hashlib
 import binascii

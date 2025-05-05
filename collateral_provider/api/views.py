@@ -60,39 +60,6 @@ class ProvideCollateralView(APIView):
         # If its valid then witness the transaction
         if serializer.is_valid():
             tx_body_cbor = serializer.validated_data['tx_body']
-
-            # # Temporary files for tx draft
-            # with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tx_draft:
-            #     tx_body_content = {
-            #         "type": "Unwitnessed Tx ConwayEra",
-            #         "description": "Ledger Cddl Format",
-            #         "cborHex": tx_body_cbor
-            #     }
-            #     json.dump(tx_body_content, tx_draft)
-            #     tx_draft_file_path = tx_draft.name
-
-            # # Temporary files for tx witness
-            # with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tx_witness:
-            #     tx_witness_file_path = tx_witness.name
-
-            # # Witness the transaction
-            # witness(tx_draft_file_path, tx_witness_file_path, env_settings['NETWORK'], settings.SKEY_PATH, settings.CLI_PATH)
-
-            # # Get the cborHex of the witness
-            # try:
-            #     with open(tx_witness_file_path, 'r') as temp_file:
-            #         witness_data = json.load(temp_file)
-            #     witness_cbor = witness_data['cborHex']
-            # except KeyError as e:
-            #     logger.error(f'Missing cborHex In Witness Data For IP: {ip_address}')
-            #     return Response(e, status=status.HTTP_400_BAD_REQUEST)
-            # except Exception as e:
-            #     logger.error(f'Error Processing Witness For: {ip_address}: {str(e)}')
-            #     return Response({"error": "Failed To Process The Tx Witness"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            # finally:
-            #     # Remove temporary files
-            #     os.remove(tx_draft_file_path)
-            #     os.remove(tx_witness_file_path)
             
             witness_cbor = witness_tx_cbor(tx_body_cbor, settings.SKEY_PATH, settings.VKEY_PATH)
             logger.debug(f'Successfully Processed Tx Witness For IP: {ip_address} On Environment: {environment}')
