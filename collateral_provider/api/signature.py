@@ -140,8 +140,8 @@ def witness_tx_cbor(tx_cbor: str, skey_path: str, vkey_path) -> str:
 
     Args:
         tx_cbor (str): The transaction CBOR from the API.
-        skey_path (str): The CLI secret key path.
-        vkey_path (str): The CLI verification key path.
+        skey_path (str): The secret key path.
+        vkey_path (str): The verification key path.
 
     Returns:
         witness_cbor (str): The CBOR of a valid witness
