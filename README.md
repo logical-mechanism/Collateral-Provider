@@ -2,7 +2,7 @@
 
 This repo aims to provide the back-end code that allows anyone to run an altruistic collateral provider for other users using Cardano smart contracts. Users will build transactions executing smart contracts using one of the available collateral UTxOs and public key hashes. The `/collateral` endpoint includes the transaction CBOR in the HTTP POST data. The return data is a witness to the transaction to use that collateral.
 
-The design of this repo is to allow a provider to host on just mainnet or any of the testnets. The back-end code does not require a full node. However, the code requires a blockfront API key for the networks used. Providers setting up their back end must configure the settings file to reflect which networks they want to provide collateral correctly. The code requires a cardano-cli binary to live in the `api/bin` folder. The collateral keys live in the `api/key` folder.
+The design of this repo is to allow a provider to host on just mainnet or any of the testnets. The back-end code does not require a full node. However, the code requires a blockfront API key for the networks used. Providers setting up their back end must configure the settings file to reflect which networks they want to provide collateral correctly. The collateral keys live in the `api/key` folder.
 
 A single `payment.skey` must exist to witness the transaction. Each network will use the same payment key. Currently, five ADA is the suggested collateral amount.
 

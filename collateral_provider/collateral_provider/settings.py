@@ -20,8 +20,8 @@ environ.Env.read_env(env_file)
 
 # Add your variables here
 PKH = env('PKH')
-CLI_PATH = os.path.join(BASE_DIR, 'api/bin/cardano-cli')
-KEY_PATH = os.path.join(BASE_DIR, 'api/key/payment.skey')
+SKEY_PATH = os.path.join(BASE_DIR, 'api/key/payment.skey')
+VKEY_PATH = os.path.join(BASE_DIR, 'api/key/payment.vkey')
 SECRET_KEY = env('DJANGO_SECRET_KEY')
 ENVIRONMENT = env('ENVIRONMENT')
 

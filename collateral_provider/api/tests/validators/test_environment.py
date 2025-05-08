@@ -20,7 +20,7 @@ class TestEnvironmentValidator(unittest.TestCase):
             self.validator.check_ip_address(ip_address)
 
         # Extract the error message from the ValidationError
-        self.assertIn(f"{ip_address} is banned", str(context.exception.detail))
+        self.assertIn(f"{ip_address} Is Banned", str(context.exception.detail))
 
     def test_check_ip_address_allowed(self):
         # Test for an allowed IP
@@ -37,7 +37,7 @@ class TestEnvironmentValidator(unittest.TestCase):
             self.validator.check_environment(environment, networks)
 
         # Extract the error message from the ValidationError
-        self.assertIn(f"Invalid environment: {environment}", str(context.exception.detail))
+        self.assertIn(f"Invalid Environment: {environment}", str(context.exception.detail))
 
     def test_check_environment_valid(self):
         # Test for a valid environment
