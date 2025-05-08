@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import tempfile
 
 from django.conf import settings
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
@@ -10,7 +9,6 @@ from rest_framework import status, throttling
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .cli import witness
 from .serializers import ProvideCollateralSerializer
 from .signature import witness_tx_cbor
 
