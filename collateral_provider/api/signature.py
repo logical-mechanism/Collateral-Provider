@@ -149,7 +149,7 @@ def witness_tx_cbor(tx_cbor: str, skey_path: str, vkey_path) -> str:
     # get the keys
     sk = get_key_from_file(skey_path)
     pk = get_key_from_file(vkey_path)
-    # get the has
+    # get the hash
     tx_hash = tx_id(tx_cbor)
     # sign and create the witness
     sig = sign(sk, tx_hash)
