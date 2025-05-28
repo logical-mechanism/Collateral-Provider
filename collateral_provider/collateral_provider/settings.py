@@ -175,6 +175,11 @@ LOGGING = {
             'level': 'WARNING',  # Reduce the log level to WARNING
             'propagate': False,
         },
+        'api.invalid_token': {
+            "handlers": ["file"],
+            "level": "WARNING",
+            "propagate": False,
+        },
     },
 }
 

@@ -12,7 +12,7 @@ from rest_framework.views import APIView
 from .serializers import ProvideCollateralSerializer
 from .signature import witness_tx_cbor
 from .permissions import TokenRequiredFromIP
-
+from .auth import LoggingTokenAuthentication
 logger = logging.getLogger('api')
 
 
@@ -26,8 +26,9 @@ class ProvideCollateralUserThrottle(throttling.UserRateThrottle):
 
 
 class ProvideCollateralView(APIView):
-    throttle_classes   = [ProvideCollateralAnonThrottle, ProvideCollateralUserThrottle]
-    permission_classes = [TokenRequiredFromIP]
+    authentication_classes = [LoggingTokenAuthentication]
+    throttle_classes       = [ProvideCollateralAnonThrottle, ProvideCollateralUserThrottle]
+    permission_classes     = [TokenRequiredFromIP]
 
     def http_method_not_allowed(self, request, *args, **kwargs):
         ip_address = self.get_client_ip(request)
