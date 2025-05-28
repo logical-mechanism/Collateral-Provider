@@ -131,12 +131,17 @@ def landing_page(request):
                         <ul>
                             <li>
                                 <a href="https://github.com/logical-mechanism/Collateral-Provider?tab=readme-ov-file#example-use" target="_blank" rel="noopener noreferrer">
-                                    View GitHub for Example Use
+                                    Example Use
                                 </a>
                             </li>
                             <li>
                                 <a href="/known_hosts/">
                                     View Known Collateral Providers
+                                </a>
+                            </li>
+                            <li>
+                                <a href="http://fjy3v62j7vqytvtviixsbixcmgyxgfolb7pg5bb3vcozxn4rrlu7z6ad.onion" target="_blank" rel="noopener noreferrer">
+                                    Available On Tor (API Token Required)
                                 </a>
                             </li>
                         </ul>

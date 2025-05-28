@@ -18,17 +18,20 @@ There are situations where providing collateral is a security and privacy concer
 
 ### Example Use
 
-Change preprod to mainnet or whichever network is available at the url you are using.
+Change `preprod` to `mainnet` or whichever network is available at the url you are using.
 
 ```bash
-curl -X POST https://www.giveme.my/preprod/collateral/ \
+cbor_hex=""
+network="preprod"
+
+curl -X POST https://www.giveme.my/${network}/collateral/ \
   -H 'Content-Type: application/json' \
   -d '{
-        "tx_body": "tx_body_cbor_here"
+        "tx_body": "'${cbor_hex}'"
       }'
 ```
 
-For more examples, please refer to the scripts folder.
+For more examples, please refer to the [scripts folder](./scripts/).
 
 ## Setup
 
