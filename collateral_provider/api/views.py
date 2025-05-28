@@ -16,14 +16,19 @@ from .permissions import TokenRequiredFromIP
 logger = logging.getLogger('api')
 
 
-class ProvideCollateralThrottle(throttling.AnonRateThrottle):
+class ProvideCollateralAnonThrottle(throttling.AnonRateThrottle):
+    # set this to whatever makes sense
+    # the real limit here is the simulate api
+    rate = '60/min'
+
+class ProvideCollateralUserThrottle(throttling.UserRateThrottle):
     # set this to whatever makes sense
     # the real limit here is the simulate api
     rate = '60/min'
 
 
 class ProvideCollateralView(APIView):
-    throttle_classes   = [ProvideCollateralThrottle]
+    throttle_classes   = [ProvideCollateralAnonThrottle, ProvideCollateralUserThrottle]
     permission_classes = [TokenRequiredFromIP]
 
     def http_method_not_allowed(self, request, *args, **kwargs):

@@ -119,10 +119,12 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
         # keep this at 1 as the worst case fallback
         'anon': '1/min',
+        'user': '1/min',
     }
 }
 
