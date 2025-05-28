@@ -44,6 +44,12 @@ DEBUG = False
 
 ALLOWED_HOSTS = ['127.0.0.1', 'localhost'] if ENVIRONMENT == "development" else env.list('ALLOWED_HOSTS')
 
+# for tor api use
+TOKEN_REQUIRED_IPS = [
+    "127.0.0.1",
+    "localhost"
+]
+
 INSTALLED_APPS = [
     'django.contrib.auth',
     'django.contrib.contenttypes',
