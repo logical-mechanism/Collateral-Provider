@@ -134,7 +134,7 @@ def create_witness_cbor(public_key: str, signature: str) -> str:
         [0, [binascii.unhexlify(public_key), binascii.unhexlify(signature)]]
     ).hex()
 
-def witness_tx_cbor(tx_cbor: str, skey_path: str, vkey_path) -> str:
+def witness_tx_cbor(tx_cbor: str, skey_path: str, vkey_path: str) -> str:
     """
     Create the witness CBOR given the tx CBOR, the skey, and the vkey paths.
 

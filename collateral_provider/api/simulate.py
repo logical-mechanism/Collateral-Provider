@@ -1,7 +1,7 @@
 import requests
 
 
-def evaluate_transaction(tx_body_cbor_hex, environment):
+def evaluate_transaction(tx_body_cbor_hex: str, environment: str) -> dict:
     # Set up the payload for the POST request
     payload = {
         "jsonrpc": "2.0",
