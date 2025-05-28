@@ -3,3 +3,5 @@ debug.log
 debug.log.*
 captcha/
 *.sock
+db.sqlite3
+copy.db.sqlite3
