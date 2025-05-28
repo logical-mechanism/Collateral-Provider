@@ -136,11 +136,16 @@ def landing_page(request):
                             </li>
                             <li>
                                 <a href="/known_hosts/">
-                                    View Known Collateral Providers
+                                    Known Collateral Providers
                                 </a>
                             </li>
                             <li>
                                 <a href="http://fjy3v62j7vqytvtviixsbixcmgyxgfolb7pg5bb3vcozxn4rrlu7z6ad.onion" target="_blank" rel="noopener noreferrer">
+                                    Available On Tor (API Token Required)
+                                </a>
+                            </li>
+                            <li>
+                                <a href="/registration/" target="_blank" rel="noopener noreferrer">
                                     Available On Tor (API Token Required)
                                 </a>
                             </li>
@@ -176,3 +181,32 @@ def known_hosts_view(request):
 def custom_disallowed_host_handler(request, exception):
     logger.warning(f"DisallowedHost: {request.get_host()}")
     return HttpResponseBadRequest("Invalid Host Header")
+
+
+## This needs to be a form that asks a user to sign some data then will create an api token
+def registration_view(request):
+    return HttpResponse(f"""
+        <!DOCTYPE html>
+        <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <meta name="description" content="An altruistic collateral provider that offers complimentary access to collateral UTxOs on Cardano.">
+                <meta name="keywords" content="collateral provider, Cardano, blockchain, decentralized, smart contracts, networks">
+                <meta name="robots" content="index, follow">
+                <link rel="canonical" href="https://giveme.my">
+                <meta property="og:title" content="Cardano Collateral Provider">
+                <meta property="og:description" content="An altruistic collateral provider that offers complimentary access to collateral UTxOs on Cardano."">
+                <meta property="og:url" content="https://giveme.my">
+                <meta property="og:type" content="website">
+                <meta property="og:image" content="{settings.STATIC_URL}android-chrome-512x512.png">
+                <link rel="icon" type="image/x-icon" href="{settings.STATIC_URL}favicon.ico">
+                <title>Cardano Collateral Provider</title>
+            </head>
+            <body>
+                <header>
+                    <h1>Registration Closed</h1>
+                </header>
+            </body>
+        </html>
+    """)
