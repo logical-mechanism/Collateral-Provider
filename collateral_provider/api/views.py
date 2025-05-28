@@ -18,12 +18,10 @@ logger = logging.getLogger('api')
 
 class ProvideCollateralAnonThrottle(throttling.AnonRateThrottle):
     # set this to whatever makes sense
-    # the real limit here is the simulate api
     rate = '60/min'
 
 class ProvideCollateralUserThrottle(throttling.UserRateThrottle):
     # set this to whatever makes sense
-    # the real limit here is the simulate api
     rate = '60/min'
 
 

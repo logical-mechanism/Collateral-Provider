@@ -3,15 +3,17 @@ set -e
 
 # Requires tor to be running on the local machine
 collat_witness() {
-  # Inputs: $1 = tx_cbor, $2 = network (preprod or mainnet)
+  # Inputs: $1 = tx_cbor, $2 = network (preprod or mainnet), $3 api token
   local tx_cbor=$1
   local network=$2
+  local token=$3
 
   # Tor hidden service URL (replace with your actual .onion URL)
   local tor_url="fjy3v62j7vqytvtviixsbixcmgyxgfolb7pg5bb3vcozxn4rrlu7z6ad.onion"
 
   # Perform the curl request through the Tor network
   local response=$(curl -s --socks5-hostname 127.0.0.1:9050 -X POST "http://${tor_url}/${network}/collateral/" \
+    -H "Authorization: Token ${token}" \
     -H 'Content-Type: application/json' \
     -d '{
           "tx_body": "'"${tx_cbor}"'"
