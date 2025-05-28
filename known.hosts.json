@@ -29,15 +29,15 @@
     },
     "public_key": "fa2025e788fae01ce10deffff386f992f62a311758819e4e3792887396c171ba"
   },
-  "c59da4ec6e515c2efc8866274dee6ac9a64b5945efd365f3a999e760": {
+  "6bbdaa10bda87cea060db64569c7e7b9766e896c4bdd8584e6544d71": {
     "testnet": {
       "utxo": {
-        "id": "68333201e493dd41b848bd742151c31060a749a49bc48d0b09541bcc840ac0c9",
+        "id": "6d4f5e9df9192f6afdef223aeca248ae74d9ae3fae3d080f1ecb0a34209ac0a3",
         "idx": 0
       },
       "url": "http://127.0.0.1:8000/preprod/collateral/",
       "onion": ""
     },
-    "public_key": ""
+    "public_key": "7c33cd41e4dd0742462ad136489ad034cdbbc8b064dd23a7a2d9b302c557f869"
   }
 }
