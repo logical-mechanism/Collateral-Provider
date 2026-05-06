@@ -57,6 +57,9 @@ else:
 # is also responsible for HSTS and HTTP -> HTTPS redirects.
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
+# Collateral endpoint throttle (per anonymous IP).
+COLLATERAL_THROTTLE_RATE = env('COLLATERAL_THROTTLE_RATE', default='60/min')
+
 INSTALLED_APPS = [
     # auth + contenttypes are required because DRF imports User lazily for
     # its default permission classes; we don't ship our own user system.

@@ -14,7 +14,7 @@ from api.tx_fields import (
     REQUIRED_SIGNERS,
     SET_TAG,
 )
-from api.views import ProvideCollateralView
+from api.views import _client_ip
 
 
 def build_happy_path_tx_cbor(env: str = "preprod") -> str:
@@ -105,7 +105,7 @@ class TestEnvironmentRouting(TestCase):
         url = reverse("collateral", kwargs={"environment": "fakenet"})
         response = self.client.post(url, {"tx_body": "deadbeef"}, format="json")
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json(), {"error": "Invalid Environment"})
+        self.assertEqual(response.json(), {"detail": "Invalid Environment"})
 
     def test_get_method_not_allowed(self):
         url = reverse("collateral", kwargs={"environment": "preprod"})
@@ -159,23 +159,21 @@ class TestThrottle(TestCase):
         self.assertEqual(response.status_code, 429)
 
 
-class TestGetClientIp(TestCase):
-    """ProvideCollateralView.get_client_ip is what we throttle on, so its
-    parsing has to be correct under the X-Forwarded-For headers a reverse
-    proxy might send."""
+class TestClientIp(TestCase):
+    """_client_ip is what we throttle and log on, so its parsing has to be
+    correct under whatever X-Forwarded-For headers a reverse proxy sends."""
 
     def setUp(self):
         self.factory = RequestFactory()
-        self.view = ProvideCollateralView()
 
     def test_uses_first_ip_in_xff_chain(self):
         request = self.factory.post("/", HTTP_X_FORWARDED_FOR="1.2.3.4, 5.6.7.8")
-        self.assertEqual(self.view.get_client_ip(request), "1.2.3.4")
+        self.assertEqual(_client_ip(request), "1.2.3.4")
 
     def test_strips_whitespace_around_xff_value(self):
         request = self.factory.post("/", HTTP_X_FORWARDED_FOR="   9.9.9.9   , 1.1.1.1")
-        self.assertEqual(self.view.get_client_ip(request), "9.9.9.9")
+        self.assertEqual(_client_ip(request), "9.9.9.9")
 
     def test_falls_back_to_remote_addr_when_no_xff(self):
         request = self.factory.post("/", REMOTE_ADDR="2.2.2.2")
-        self.assertEqual(self.view.get_client_ip(request), "2.2.2.2")
+        self.assertEqual(_client_ip(request), "2.2.2.2")
