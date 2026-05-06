@@ -42,44 +42,53 @@ ENVIRONMENTS = {
 # False is production
 DEBUG = False
 
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost'] if ENVIRONMENT == "development" else env.list('ALLOWED_HOSTS')
+if ENVIRONMENT == "development":
+    ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
+else:
+    ALLOWED_HOSTS = env.list('ALLOWED_HOSTS')
+    if not ALLOWED_HOSTS:
+        raise RuntimeError(
+            "ALLOWED_HOSTS env var is empty in non-development mode — every "
+            "request would be rejected. Refusing to start."
+        )
+
+# We're behind a TLS-terminating reverse proxy in production. Trust the
+# X-Forwarded-Proto header so request.is_secure() works correctly. The proxy
+# is also responsible for HSTS and HTTP -> HTTPS redirects.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 INSTALLED_APPS = [
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
     'django.contrib.staticfiles',
     'rest_framework',
     'corsheaders',
-    'api'
+    'api',
 ]
 
+# We don't use sessions, auth, or CSRF — this is a stateless public POST API.
+# Skip the corresponding middleware so each request doesn't pay for them.
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # must precede CommonMiddleware
     'api.middleware.HandleDisallowedHostMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
 ]
 
 ROOT_URLCONF = 'collateral_provider.urls'
 
 WSGI_APPLICATION = 'collateral_provider.wsgi.application'
 
-# TEMPLATES setting to support Django REST Framework's browsable API and any template rendering
+# Required by DRF's browsable API and our HTML landing page. The auth and
+# messages context processors aren't applicable (no auth, no messages app).
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],  # Add custom template directories here
+        'DIRS': [],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
                 'django.template.context_processors.debug',
                 'django.template.context_processors.request',
-                'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
             ],
         },
     },
@@ -89,6 +98,18 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': ':memory:',
+    }
+}
+
+# DRF's AnonRateThrottle stores per-IP request counts in the Django cache.
+# The default LocMemCache is per-process — under multi-worker gunicorn each
+# worker has its own counter, so the real ceiling is N×rate. File-based cache
+# shares state across workers on the same host without requiring Redis.
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
+        'LOCATION': env('CACHE_DIR', default=os.path.join(BASE_DIR, '.cache')),
+        'TIMEOUT': 600,
     }
 }
 
@@ -162,27 +183,11 @@ LOGGING = {
     },
 }
 
-# Production-specific settings
-if ENVIRONMENT == 'production':
-    # Enforce HTTPS
-    SECURE_SSL_REDIRECT = False
-
-    # HSTS to enforce HTTPS in browsers
-    SECURE_HSTS_SECONDS = 0  # 1 year
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-    SECURE_HSTS_PRELOAD = True
-
-    # If you're not using Django sessions or CSRF, you can skip these
-    SESSION_COOKIE_SECURE = False  # Not needed if no session-based authentication
-    CSRF_COOKIE_SECURE = False  # No CSRF needed for open API
-    CSRF_COOKIE_HTTPONLY = False  # CSRF not required for open API
-    CSRF_COOKIE_SAMESITE = None  # Not applicable if CSRF is disabled
-else:
-    # In development or testing environments
-    SESSION_COOKIE_SECURE = False
-    CSRF_COOKIE_SECURE = False
-    SECURE_SSL_REDIRECT = False
-
+# This is a stateless POST API — no sessions, no CSRF, no auth cookies.
+# TLS, HSTS, and HTTP->HTTPS redirects are all handled by the reverse proxy
+# in front of gunicorn, so we don't set the SECURE_* / SESSION_* / CSRF_*
+# flags here. SECURE_PROXY_SSL_HEADER above is what makes that delegation
+# safe (Django will trust the proxy's Forwarded-Proto header).
 
 STATIC_URL = '/static/'
 STATICFILES_DIRS = [

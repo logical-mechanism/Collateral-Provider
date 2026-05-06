@@ -1,6 +1,7 @@
 import binascii
 import hashlib
 import json
+from functools import lru_cache
 
 import cbor2
 from nacl.encoding import RawEncoder
@@ -35,10 +36,14 @@ def _ordered_set(items) -> cbor2.CBORTag:
     return cbor2.CBORTag(SET_TAG, sorted(items))
 
 
+@lru_cache(maxsize=4)
 def get_key_from_file(file_path: str) -> str:
     """Read a Cardano-CLI-style {"cborHex": "..."} key file and return the raw
     key bytes as hex. The leading 4 hex chars are the CBOR byte-string tag and
-    are stripped so callers get just the key material."""
+    are stripped so callers get just the key material.
+
+    Cached per-path because the keys never change during process lifetime.
+    Without the cache we'd open + json-decode the skey on every request."""
     with open(file_path) as file:
         data = json.load(file)
     return data["cborHex"][4:]
