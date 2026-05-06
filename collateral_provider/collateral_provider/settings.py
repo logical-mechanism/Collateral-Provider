@@ -64,6 +64,7 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.staticfiles',
     'rest_framework',
+    'drf_spectacular',
     'corsheaders',
     'api',
 ]
@@ -135,7 +136,22 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         # keep this at 1 as the worst case fallback
         'anon': '1/min',
-    }
+    },
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Cardano Collateral Provider API',
+    'DESCRIPTION': (
+        'Submit a Cardano transaction CBOR. If the transaction satisfies the '
+        'collateral-usage contract (uses this provider\'s collateral UTxO, '
+        'requires this provider\'s PKH as a signer, does not spend the '
+        'collateral, has is_valid=true, and would succeed on-chain), the '
+        'service returns a vkey witness CBOR you can attach to the witness set.'
+    ),
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
 }
 
 CORS_ALLOW_ALL_ORIGINS = True

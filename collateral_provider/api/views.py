@@ -4,160 +4,168 @@ import os
 from typing import ClassVar
 
 from django.conf import settings
-from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
-from django.shortcuts import redirect
-from rest_framework import status, throttling
+from django.http import HttpResponseBadRequest, JsonResponse
+from django.shortcuts import redirect, render
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    inline_serializer,
+)
+from rest_framework import serializers, status, throttling
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .serializers import ProvideCollateralSerializer
 from .signature import witness_tx_cbor
 
-logger = logging.getLogger('api')
+logger = logging.getLogger("api")
+
+
+def _known_hosts_path() -> str:
+    return os.path.join(os.path.dirname(settings.BASE_DIR), "known.hosts.json")
+
+
+def _load_known_hosts() -> dict:
+    with open(_known_hosts_path()) as f:
+        return json.load(f)
 
 
 class ProvideCollateralThrottle(throttling.AnonRateThrottle):
-    # set this to whatever makes sense
-    # the real limit here is the simulate api
-    rate = '60/min'
+    # The real bottleneck is the Koios evaluation call, not us. 60/min/IP is
+    # generous for legit clients (one tx per second) and tight enough that a
+    # single bad actor can't exhaust an upstream rate limit on their own.
+    rate = "60/min"
 
 
 class ProvideCollateralView(APIView):
     throttle_classes: ClassVar[list] = [ProvideCollateralThrottle]
 
+    @extend_schema(
+        operation_id="provide_collateral",
+        summary="Sign a transaction that uses this provider's collateral",
+        description=(
+            "Validate the submitted Cardano transaction CBOR against the "
+            "collateral-usage contract and, if it passes, return a vkey "
+            "witness for it. Validation includes: collateral UTxO matches "
+            "the configured one for this network, the provider PKH appears "
+            "in required signers, the collateral is not in inputs, the "
+            "is_valid flag is true, and Koios `evaluateTransaction` accepts "
+            "the tx. Rate limited to 60 req/min per IP."
+        ),
+        parameters=[
+            OpenApiParameter(
+                name="environment",
+                location=OpenApiParameter.PATH,
+                description="One of the configured networks (e.g. `preprod`, `mainnet`).",
+                required=True,
+                type=str,
+            ),
+        ],
+        request=ProvideCollateralSerializer,
+        responses={
+            200: OpenApiResponse(
+                response=inline_serializer(
+                    name="WitnessResponse",
+                    fields={"witness": serializers.CharField()},
+                ),
+                description="Witness CBOR (hex). Decoded shape: `[0, [pubkey, signature]]`.",
+            ),
+            400: OpenApiResponse(description="Validation error — invalid environment, invalid CBOR, or tx fails the collateral-usage rules."),
+            429: OpenApiResponse(description="Rate limit exceeded."),
+            503: OpenApiResponse(description="Validation upstream (Koios) is unavailable; try again later."),
+        },
+        examples=[
+            OpenApiExample(
+                "Sample request",
+                value={"tx_body": "84a900d901028182582000...f5f6"},
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Sample success",
+                value={"witness": "8200825820...5840..."},
+                response_only=True,
+            ),
+        ],
+    )
+    def post(self, request, environment):
+        return self._post(request, environment)
+
     def http_method_not_allowed(self, request, *args, **kwargs):
         ip_address = self.get_client_ip(request)
-        logger.warning(f'Get Request Received From IP: {ip_address} Method Not Allowed: {request.method} On {request.path}')
+        logger.warning(
+            f"Method Not Allowed From IP: {ip_address} "
+            f"Method: {request.method} Path: {request.path}"
+        )
         return Response(
             {"detail": "Method Not Allowed"},
-            status=status.HTTP_405_METHOD_NOT_ALLOWED
+            status=status.HTTP_405_METHOD_NOT_ALLOWED,
         )
 
-    def post(self, request, environment):
-        # Get client's IP address
+    def _post(self, request, environment):
         ip_address = self.get_client_ip(request)
-        logger.debug(f'Request Received From IP: {ip_address} For Environment: {environment}')
+        logger.debug(f"Request Received From IP: {ip_address} For Environment: {environment}")
 
-        # Check if the environment is valid
-        networks = list(settings.ENVIRONMENTS.keys())
         env_settings = settings.ENVIRONMENTS.get(environment)
         if not env_settings:
-            logger.error(f'Invalid Environment {environment} From IP: {ip_address}')
-            return Response({"error": "Invalid Environment"}, status=status.HTTP_400_BAD_REQUEST)
+            logger.error(f"Invalid Environment {environment} From IP: {ip_address}")
+            return Response(
+                {"error": "Invalid Environment"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        # Serialize the incoming data
         serializer = ProvideCollateralSerializer(
             data=request.data,
             context={
-                'environment': environment,
-                'env_settings': env_settings,
-                'ip_address': ip_address,
-                'networks': networks,
-            }
+                "environment": environment,
+                "env_settings": env_settings,
+                "ip_address": ip_address,
+                "networks": list(settings.ENVIRONMENTS.keys()),
+            },
         )
-
-        # If its valid then witness the transaction
-        if serializer.is_valid():
-            tx_body_cbor = serializer.validated_data['tx_body']
-            
-            witness_cbor = witness_tx_cbor(tx_body_cbor, settings.SKEY_PATH, settings.VKEY_PATH)
-            logger.debug(f'Successfully Processed Tx Witness For IP: {ip_address} On Environment: {environment}')
-
-            # Return the witness data
-            return Response({'witness': witness_cbor}, status=status.HTTP_200_OK)
-
-        else:
-            logger.error(f'Invalid Data From IP: {ip_address}: {serializer.errors}')
+        if not serializer.is_valid():
+            logger.error(f"Invalid Data From IP: {ip_address}: {serializer.errors}")
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+        tx_body_cbor = serializer.validated_data["tx_body"]
+        witness_cbor = witness_tx_cbor(tx_body_cbor, settings.SKEY_PATH, settings.VKEY_PATH)
+        logger.debug(f"Witnessed Tx From IP: {ip_address} On Environment: {environment}")
+        return Response({"witness": witness_cbor}, status=status.HTTP_200_OK)
+
     def get_client_ip(self, request):
-        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
         if x_forwarded_for:
-            return x_forwarded_for.split(',')[0].strip()
-        return request.META.get('REMOTE_ADDR')
+            return x_forwarded_for.split(",")[0].strip()
+        return request.META.get("REMOTE_ADDR")
 
 
-# very simply landing page that auto loads from the known.host.json file
 def landing_page(request):
-    # Get the parent directory of BASE_DIR
-    parent_dir = os.path.abspath(os.path.join(settings.BASE_DIR, os.pardir))
-    # Load the JSON file from the parent directory
-    json_file_path = os.path.join(parent_dir, 'known.hosts.json')
-    with open(json_file_path) as json_file:
-        data = json.load(json_file)
-    content = data.get(
-        settings.PKH, "Public Key Hash Not Found In Known Hosts")
-    return HttpResponse(f"""
-        <!DOCTYPE html>
-        <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <meta name="description" content="An altruistic collateral provider that offers complimentary access to collateral UTxOs on Cardano.">
-                <meta name="keywords" content="collateral provider, Cardano, blockchain, decentralized, smart contracts, networks">
-                <meta name="robots" content="index, follow">
-                <link rel="canonical" href="https://giveme.my">
-                <meta property="og:title" content="Cardano Collateral Provider">
-                <meta property="og:description" content="An altruistic collateral provider that offers complimentary access to collateral UTxOs on Cardano."">
-                <meta property="og:url" content="https://giveme.my">
-                <meta property="og:type" content="website">
-                <meta property="og:image" content="{settings.STATIC_URL}android-chrome-512x512.png">
-                <link rel="icon" type="image/x-icon" href="{settings.STATIC_URL}favicon.ico">
-                <title>Cardano Collateral Provider</title>
-            </head>
-            <body>
-                <header>
-                    <h1>Cardano Collateral Provider</h1>
-                </header>
-                <main>
-                    <section>
-                        <h2>Required Signer Hash:</h2>
-                        <p>{settings.PKH}</p>
-                    </section>
-                    <section>
-                        <h2>Available Networks:</h2>
-                        <pre>{json.dumps(content, indent=4)}</pre>
-                    </section>
-                    <section>
-                        <h2>Resources</h2>
-                        <ul>
-                            <li>
-                                <a href="https://github.com/logical-mechanism/Collateral-Provider?tab=readme-ov-file#example-use" target="_blank" rel="noopener noreferrer">
-                                    View GitHub for Example Use
-                                </a>
-                            </li>
-                            <li>
-                                <a href="/known_hosts/">
-                                    View Known Collateral Providers
-                                </a>
-                            </li>
-                        </ul>
-                    </section>
-                </main>
-                <footer>
-                    <p>Created By Logical Mechanism LLC With ❤️</p>
-                </footer>
-            </body>
-        </html>
-    """)
-
-
-def custom_page_not_found(request, exception):
-    return redirect('/')
+    """Render the public-facing landing page. Shows the provider's PKH so a
+    user can confirm they're talking to the right provider, and the network
+    config from known.hosts.json keyed by that PKH."""
+    try:
+        hosts = _load_known_hosts()
+    except FileNotFoundError:
+        hosts = {}
+    networks = hosts.get(settings.PKH, "Public Key Hash Not Found In Known Hosts")
+    return render(
+        request,
+        "api/landing.html",
+        {"pkh": settings.PKH, "networks_json": json.dumps(networks, indent=4)},
+    )
 
 
 def known_hosts_view(request):
-    # Get the parent directory of BASE_DIR
-    parent_dir = os.path.abspath(os.path.join(settings.BASE_DIR, os.pardir))
-    # Load the JSON file from the parent directory
-    json_file_path = os.path.join(parent_dir, 'known.hosts.json')
+    """Return the full known-hosts registry as JSON."""
     try:
-        with open(json_file_path) as json_file:
-            data = json.load(json_file)
+        return JsonResponse(_load_known_hosts())
     except FileNotFoundError:
-        return JsonResponse({'error': 'File Not Found'}, status=404)
-    # Return the JSON response
-    return JsonResponse(data)
+        return JsonResponse({"error": "File Not Found"}, status=404)
+
+
+def custom_page_not_found(request, exception):
+    return redirect("/")
 
 
 def custom_disallowed_host_handler(request, exception):
