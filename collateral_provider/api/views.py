@@ -128,10 +128,11 @@ class ProvideCollateralView(APIView):
                 "networks": list(settings.ENVIRONMENTS.keys()),
             },
         )
-        if not serializer.is_valid():
-            # Validator already logged the specific reason at WARNING level.
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
+        # raise_exception=True lets the custom DRF exception handler
+        # normalize the response shape to {"detail": "..."} consistently
+        # with every other 4xx/5xx the API can produce. The validator
+        # already logged the specific reason at WARNING level.
+        serializer.is_valid(raise_exception=True)
         tx_body_cbor = serializer.validated_data["tx_body"]
         witness_cbor = witness_tx_cbor(tx_body_cbor, settings.SKEY_PATH, settings.VKEY_PATH)
         logger.info("Witnessed tx: ip=%s env=%s", ip_address, environment)

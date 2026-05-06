@@ -147,6 +147,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # whatever rate is in effect.
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'EXCEPTION_HANDLER': 'api.util.normalize_error_response',
     'DEFAULT_THROTTLE_RATES': {
         'anon': COLLATERAL_THROTTLE_RATE,  # only consulted by AnonRateThrottle subclasses
     },
