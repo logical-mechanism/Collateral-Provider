@@ -25,9 +25,13 @@ ignore = [
 
 [tool.coverage.run]
 branch = true
-source = ["collateral_provider/api"]
+source = ["api"]
 omit = ["**/migrations/*", "**/tests/*"]
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

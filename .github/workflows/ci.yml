@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main, production]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install pip-audit
+
+      # The dev .env in the repo is gitignored; create one with values that
+      # are valid enough for the test suite. Tests don't talk to the network,
+      # so the txids/network strings just need to parse.
+      - name: Create test .env
+        run: |
+          cat > collateral_provider/.env <<'EOF'
+          PKH=6bbdaa10bda87cea060db64569c7e7b9766e896c4bdd8584e6544d71
+          DJANGO_SECRET_KEY=ci-secret-key-not-for-production
+          ENVIRONMENT=development
+          ALLOWED_HOSTS=
+          PREPROD_TXID=6d4f5e9df9192f6afdef223aeca248ae74d9ae3fae3d080f1ecb0a34209ac0a3
+          PREPROD_TXIDX=0
+          PREPROD_NETWORK=--testnet-magic 1
+          MAINNET_TXID=0000000000000000000000000000000000000000000000000000000000000000
+          MAINNET_TXIDX=0
+          MAINNET_NETWORK=--mainnet
+          EOF
+
+      - name: Lint (ruff)
+        run: ruff check collateral_provider/
+
+      - name: Run tests
+        working-directory: collateral_provider
+        run: python manage.py test --verbosity 2
+
+      - name: Coverage report
+        working-directory: collateral_provider
+        run: |
+          coverage run --rcfile=../pyproject.toml manage.py test
+          coverage report
+
+      - name: Validate OpenAPI schema
+        working-directory: collateral_provider
+        run: python manage.py spectacular --validate --file /tmp/schema.yml
+
+      - name: Audit runtime dependencies
+        run: pip-audit -r requirements.txt
