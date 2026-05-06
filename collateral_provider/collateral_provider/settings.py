@@ -174,10 +174,14 @@ SPECTACULAR_SETTINGS = {
 CORS_ALLOW_ALL_ORIGINS = True
 
 # Logging. LOG_LEVEL controls the api logger; LOG_FILE is where we write
-# (rotated at 1 MiB x 3 backups). The defaults preserve the existing
-# debug.log path so existing logrotate / monitoring keep working.
+# (rotated at 1 MiB x 3 backups). LOG_FORMAT picks plain text (default) or
+# JSON-per-line (for log-aggregator ingest). Defaults preserve existing
+# behavior so existing logrotate / monitoring keep working.
 LOG_LEVEL = env('LOG_LEVEL', default='DEBUG')
 LOG_FILE = env('LOG_FILE', default=str(BASE_DIR / 'debug.log'))
+LOG_FORMAT = env('LOG_FORMAT', default='text')  # 'text' or 'json'
+if LOG_FORMAT not in ('text', 'json'):
+    raise RuntimeError(f"LOG_FORMAT must be 'text' or 'json', got {LOG_FORMAT!r}")
 
 # Every record gets a request_id field via the RequestIDLogFilter, which
 # reads from a contextvar set by RequestIDMiddleware. Outside a request
@@ -199,19 +203,22 @@ LOGGING = {
             'format': '{levelname} [{request_id}] {message}',
             'style': '{',
         },
+        'json': {
+            '()': 'api.log_format.JsonFormatter',
+        },
     },
     'handlers': {
         'console': {
             'level': 'DEBUG',
             'class': 'logging.StreamHandler',
-            'formatter': 'simple',
+            'formatter': 'json' if LOG_FORMAT == 'json' else 'simple',
             'filters': ['request_id'],
         },
         'file': {
             'level': LOG_LEVEL,
             'class': 'logging.handlers.RotatingFileHandler',
             'filename': LOG_FILE,
-            'formatter': 'verbose',
+            'formatter': 'json' if LOG_FORMAT == 'json' else 'verbose',
             'filters': ['request_id'],
             'maxBytes': 1024 * 1024 * 1,
             'backupCount': 3,
