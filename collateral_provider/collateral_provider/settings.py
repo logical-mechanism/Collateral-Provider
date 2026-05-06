@@ -4,6 +4,10 @@ from pathlib import Path
 
 import environ
 
+# Single source of truth for the service version. /healthz reports it, the
+# OpenAPI schema reports it. Bump on any externally-visible change.
+from api import __version__ as API_VERSION
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -162,7 +166,7 @@ SPECTACULAR_SETTINGS = {
         'collateral, has is_valid=true, and would succeed on-chain), the '
         'service returns a vkey witness CBOR you can attach to the witness set.'
     ),
-    'VERSION': '1.0.0',
+    'VERSION': API_VERSION,
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
 }
