@@ -16,121 +16,109 @@ class TestCborValidator(unittest.TestCase):
         self.validator = CborValidator(self.mock_logger)
 
     def test_empty_cbor_hex(self):
-        # Test for an allowed IP
-        cbor_hex = ""
         with self.assertRaises(ValidationError) as context:
-            self.validator.check_cbor_hex(cbor_hex)
-            # Extract the error message from the ValidationError
-            self.assertIn("tx_body cannot be empty", str(context.exception.detail))
+            self.validator.check_cbor_hex("")
+        self.assertIn("Tx Can't Be Empty", str(context.exception.detail))
 
     def test_not_cbor_hex(self):
-        # Test for an allowed IP
-        cbor_hex = "hello world"
         with self.assertRaises(ValidationError) as context:
-            self.validator.check_cbor_hex(cbor_hex)
-            # Extract the error message from the ValidationError
-            self.assertIn("invalid hex data in tx_body", str(context.exception.detail))
+            self.validator.check_cbor_hex("hello world")
+        self.assertIn("Invalid Hex Data In Tx", str(context.exception.detail))
 
     def test_too_large_cbor_hex(self):
-        # Test for an allowed IP
         with self.assertRaises(ValidationError) as context:
             self.validator.check_cbor_hex(invalid_tx_body_too_big())
-            # Extract the error message from the ValidationError
-            self.assertIn("tx_body is too large", str(context.exception.detail))
+        self.assertIn("Tx Is Too Large", str(context.exception.detail))
 
     def test_not_valid_cbor(self):
-        # Test for an allowed IP
-        cbor_hex = "acab"
-        tx_bytes = self.validator.check_cbor_hex(cbor_hex)
+        tx_bytes = self.validator.check_cbor_hex("acab")
         with self.assertRaises(ValidationError) as context:
             self.validator.check_tx_body(tx_bytes)
-            # Extract the error message from the ValidationError
-            self.assertIn("invalid cbor data in tx_body", str(context.exception.detail))
+        self.assertIn("Invalid CBOR Data In Tx", str(context.exception.detail))
 
     def test_tx_body_not_list(self):
+        # Top-level is a CBOR map (a9...), not the expected 4-element list.
         cbor_hex = "a900d9010282825820e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c500825820e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c5010dd90102818258201d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f0012d9010282825820680d6b17aeac96bd3c965f6e9a6b45082870e267ea260e4aeac31550719d315901825820724b724ec5c489dff4d70a2cf94389aac21f88193891a2d6b3e02b4e2997d395010182a300581d7025891024cd6915ab6f7d85d43869c7bfc7021b7008bad86e70a7c6ce011a001605bc028201d81843d87980a300581d70c757598c8d204251f0e102b5092adf5627aeed553911cd6f82bd315401821a00184476a1581c20d133fb8814f3f6e9aa7777d73aab7c8cdfa7d9b2d1c94ba0f94100a1582000aeb168c1c5a787d5de5cbc0760d078bcc51b22ba8fa69e432a89137f17d9f601028201d818585bd8799f1b00000192ea62da801b00000192ea676e601a000493e0581c20d133fb8814f3f6e9aa7777d73aab7c8cdfa7d9b2d1c94ba0f94100582000aeb168c1c5a787d5de5cbc0760d078bcc51b22ba8fa69e432a89137f17d9f6ff021a000186a0031a047eb7ff081a047eb5a60ed9010281581c7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f40b582001ca3d633ca222424e36c1ba5a9cd5501fd4b19f3f6b136af820dd4b3ccdf349a105a282000082d87a8082000082000182d87980820000"
         tx_bytes = self.validator.check_cbor_hex(cbor_hex)
         with self.assertRaises(ValidationError) as context:
             self.validator.check_tx_body(tx_bytes)
-            # Extract the error message from the ValidationError
-            self.assertIn("tx_body is not a list", str(context.exception.detail))
+        self.assertIn("Tx Is Not A List", str(context.exception.detail))
 
     def test_missing_boolean(self):
+        # 2-element list (82...) — no is_valid flag at index 2.
         cbor_hex = "82a900d9010282825820e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c500825820e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c5010dd90102818258201d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f0012d9010282825820680d6b17aeac96bd3c965f6e9a6b45082870e267ea260e4aeac31550719d315901825820724b724ec5c489dff4d70a2cf94389aac21f88193891a2d6b3e02b4e2997d395010182a300581d7025891024cd6915ab6f7d85d43869c7bfc7021b7008bad86e70a7c6ce011a001605bc028201d81843d87980a300581d70c757598c8d204251f0e102b5092adf5627aeed553911cd6f82bd315401821a00184476a1581c20d133fb8814f3f6e9aa7777d73aab7c8cdfa7d9b2d1c94ba0f94100a1582000aeb168c1c5a787d5de5cbc0760d078bcc51b22ba8fa69e432a89137f17d9f601028201d818585bd8799f1b00000192ea62da801b00000192ea676e601a000493e0581c20d133fb8814f3f6e9aa7777d73aab7c8cdfa7d9b2d1c94ba0f94100582000aeb168c1c5a787d5de5cbc0760d078bcc51b22ba8fa69e432a89137f17d9f6ff021a000186a0031a047eb7ff081a047eb5a60ed9010281581c7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f40b582001ca3d633ca222424e36c1ba5a9cd5501fd4b19f3f6b136af820dd4b3ccdf349a105a282000082d87a8082000082000182d87980820000"
         tx_bytes = self.validator.check_cbor_hex(cbor_hex)
         with self.assertRaises(ValidationError) as context:
             self.validator.check_tx_body(tx_bytes)
-            # Extract the error message from the ValidationError
-            self.assertIn("boolean does not exist", str(context.exception.detail))
+        self.assertIn("Boolean Does Not Exist In Tx", str(context.exception.detail))
 
     def test_not_a_bool(self):
+        # is_valid slot is the integer 0 instead of true/false.
         cbor_hex = "84a900d9010282825820e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c500825820e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c5010dd90102818258201d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f0012d9010282825820680d6b17aeac96bd3c965f6e9a6b45082870e267ea260e4aeac31550719d315901825820724b724ec5c489dff4d70a2cf94389aac21f88193891a2d6b3e02b4e2997d395010182a300581d7025891024cd6915ab6f7d85d43869c7bfc7021b7008bad86e70a7c6ce011a001605bc028201d81843d87980a300581d70c757598c8d204251f0e102b5092adf5627aeed553911cd6f82bd315401821a00184476a1581c20d133fb8814f3f6e9aa7777d73aab7c8cdfa7d9b2d1c94ba0f94100a1582000aeb168c1c5a787d5de5cbc0760d078bcc51b22ba8fa69e432a89137f17d9f601028201d818585bd8799f1b00000192ea62da801b00000192ea676e601a000493e0581c20d133fb8814f3f6e9aa7777d73aab7c8cdfa7d9b2d1c94ba0f94100582000aeb168c1c5a787d5de5cbc0760d078bcc51b22ba8fa69e432a89137f17d9f6ff021a000186a0031a047eb7ff081a047eb5a60ed9010281581c7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f40b582001ca3d633ca222424e36c1ba5a9cd5501fd4b19f3f6b136af820dd4b3ccdf349a105a282000082d87a8082000082000182d8798082000000f6"
         tx_bytes = self.validator.check_cbor_hex(cbor_hex)
         with self.assertRaises(ValidationError) as context:
             self.validator.check_tx_body(tx_bytes)
-            # Extract the error message from the ValidationError
-            self.assertIn("boolean is not a bool", str(context.exception.detail))
+        self.assertIn("Boolean Is Not A Bool", str(context.exception.detail))
 
     def test_bool_is_false(self):
+        # is_valid is explicitly false (f4) — collateral would be consumed.
         cbor_hex = "84a900d9010282825820e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c500825820e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c5010dd90102818258201d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f0012d9010282825820680d6b17aeac96bd3c965f6e9a6b45082870e267ea260e4aeac31550719d315901825820724b724ec5c489dff4d70a2cf94389aac21f88193891a2d6b3e02b4e2997d395010182a300581d7025891024cd6915ab6f7d85d43869c7bfc7021b7008bad86e70a7c6ce011a001605bc028201d81843d87980a300581d70c757598c8d204251f0e102b5092adf5627aeed553911cd6f82bd315401821a00184476a1581c20d133fb8814f3f6e9aa7777d73aab7c8cdfa7d9b2d1c94ba0f94100a1582000aeb168c1c5a787d5de5cbc0760d078bcc51b22ba8fa69e432a89137f17d9f601028201d818585bd8799f1b00000192ea62da801b00000192ea676e601a000493e0581c20d133fb8814f3f6e9aa7777d73aab7c8cdfa7d9b2d1c94ba0f94100582000aeb168c1c5a787d5de5cbc0760d078bcc51b22ba8fa69e432a89137f17d9f6ff021a000186a0031a047eb7ff081a047eb5a60ed9010281581c7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f40b582001ca3d633ca222424e36c1ba5a9cd5501fd4b19f3f6b136af820dd4b3ccdf349a105a282000082d87a8082000082000182d87980820000f4f6"
         tx_bytes = self.validator.check_cbor_hex(cbor_hex)
         with self.assertRaises(ValidationError) as context:
             self.validator.check_tx_body(tx_bytes)
-            # Extract the error message from the ValidationError
-            self.assertIn("boolean can not be false", str(context.exception.detail))
+        self.assertIn("Boolean Can't Be False", str(context.exception.detail))
 
     def test_body_is_not_dict(self):
-        cbor_hex = "83825820e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c500f5f6"
+        # 4-element top list with a valid bool at index 2 but bytes at index 0
+        # — gets past the boolean check, fails the "body is a map" check.
+        cbor_hex = "845820e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e080f5f6"
         tx_bytes = self.validator.check_cbor_hex(cbor_hex)
         with self.assertRaises(ValidationError) as context:
             self.validator.check_tx_body(tx_bytes)
-            # Extract the error message from the ValidationError
-            self.assertIn("body is not a dict", str(context.exception.detail))
+        self.assertIn("Tx Body Is Not A Dict", str(context.exception.detail))
 
     def test_inputs_dont_exist(self):
-        cbor_hex = "84a0a0f5f6"
-        tx_bytes = self.validator.check_cbor_hex(cbor_hex)
+        # Body has no inputs key (a0 = empty map).
+        tx_bytes = self.validator.check_cbor_hex("84a0a0f5f6")
         body = self.validator.check_tx_body(tx_bytes)
         with self.assertRaises(ValidationError) as context:
             self.validator.check_inputs(body, {})
-            # Extract the error message from the ValidationError
-            self.assertIn("inputs does not exist", str(context.exception.detail))
+        self.assertIn("Inputs Does Not Exist In Body", str(context.exception.detail))
 
     def test_inputs_are_not_a_set(self):
-        cbor_hex = "84a100a0a0f5f6"
-        tx_bytes = self.validator.check_cbor_hex(cbor_hex)
+        # Body has key 0 but its value is an empty map, not a set.
+        tx_bytes = self.validator.check_cbor_hex("84a100a0a0f5f6")
         body = self.validator.check_tx_body(tx_bytes)
         with self.assertRaises(ValidationError) as context:
             self.validator.check_inputs(body, {})
-            # Extract the error message from the ValidationError
-            self.assertIn("inputs are not a set", str(context.exception.detail))
+        self.assertIn("Inputs Are Not A Set", str(context.exception.detail))
 
     def test_inputs_are_spending_collat(self):
-        cbor_hex = "84a100a0a0f5f6"
+        # Inputs include the collateral UTxO — that would consume it.
+        cbor_hex = "84a100d9010281825820e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c500a0f5f6"
         tx_bytes = self.validator.check_cbor_hex(cbor_hex)
         body = self.validator.check_tx_body(tx_bytes)
         with self.assertRaises(ValidationError) as context:
             self.validator.check_inputs(body, {'TXID': 'e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c5', 'TXIDX': 0})
-            # Extract the error message from the ValidationError
-            self.assertIn("collateral is being spent", str(context.exception.detail))
+        self.assertIn("Collateral Is Being Spent In Tx", str(context.exception.detail))
 
     def test_outputs_dont_exist(self):
+        # Has inputs (key 0) but no outputs (no key 1).
         cbor_hex = "84a100d9010282825820e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c500825820e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c501a105a282000082d87a8082000082000182d87980820000f5f6"
         tx_bytes = self.validator.check_cbor_hex(cbor_hex)
         body = self.validator.check_tx_body(tx_bytes)
         with self.assertRaises(ValidationError) as context:
             self.validator.check_outputs(body)
-            # Extract the error message from the ValidationError
-            self.assertIn("outputs do not exist in tx_body", str(context.exception.detail))
+        self.assertIn("Outputs Does Not Exist In Body", str(context.exception.detail))
 
     def test_outputs_is_not_list(self):
+        # Outputs slot (key 1) is an empty map, not a list.
         cbor_hex = "84a900d9010282825820e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c500825820e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c50101a0021a000186a0031a047eb7ff081a047eb5a60b582001ca3d633ca222424e36c1ba5a9cd5501fd4b19f3f6b136af820dd4b3ccdf3490dd90102818258201d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f000ed9010281581c7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f412d9010282825820680d6b17aeac96bd3c965f6e9a6b45082870e267ea260e4aeac31550719d315901825820724b724ec5c489dff4d70a2cf94389aac21f88193891a2d6b3e02b4e2997d39501a105a282000082d87a8082000082000182d87980820000f5f6"
         tx_bytes = self.validator.check_cbor_hex(cbor_hex)
         body = self.validator.check_tx_body(tx_bytes)
         with self.assertRaises(ValidationError) as context:
             self.validator.check_outputs(body)
-            # Extract the error message from the ValidationError
-            self.assertIn("outputs are not a list", str(context.exception.detail))
+        self.assertIn("Outputs Are Not A List", str(context.exception.detail))
 
     @patch("api.validators.cbor.banned_addresses", ["7025891024cd6915ab6f7d85d43869c7bfc7021b7008bad86e70a7c6ce"])
     def test_check_address_banned(self):
