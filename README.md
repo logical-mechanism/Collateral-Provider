@@ -47,6 +47,17 @@ curl -X POST https://www.giveme.my/preprod/collateral/ \
 Replace `preprod` with whichever network the host you're calling supports.
 For client-side examples in Python and Bash, see [`scripts/`](scripts/).
 
+### Other endpoints
+
+- `GET /healthz` — liveness/readiness probe. Returns `200 {"status": "ok", "version": "..."}` when the signing keys and `known.hosts.json` are readable; `503` with a `problems` list otherwise. Not rate-limited.
+- `GET /known_hosts/` — full known-providers registry as JSON.
+- `GET /` — public landing page (PKH, configured networks, doc links).
+
+Every response carries an `X-Request-ID` header (mint a 12-char id per
+request, or echo back a client-supplied `X-Request-ID` capped at 64 chars).
+The id is also stamped on every log line emitted during the request, so a
+user reporting a bad response can give you a single id to grep for.
+
 ### API documentation
 
 When the server is running, interactive OpenAPI docs are available at:
@@ -54,6 +65,18 @@ When the server is running, interactive OpenAPI docs are available at:
 - `/api/docs/` — Swagger UI
 - `/api/redoc/` — ReDoc
 - `/api/schema/` — raw OpenAPI 3 schema
+
+### Error responses
+
+Every 4xx/5xx response uses a single shape:
+
+```json
+{ "detail": "<human-readable message>" }
+```
+
+That includes throttling (429), validation failures (400), invalid
+environment (400), method-not-allowed (405), and upstream-unavailable (503).
+Field names from internal serializers are not leaked.
 
 ## Setup
 
@@ -110,4 +133,24 @@ gunicorn collateral_provider.wsgi:application  # prod (behind a TLS proxy)
 In production this expects to sit behind a TLS-terminating reverse proxy
 (nginx, Caddy, etc.). Django trusts `X-Forwarded-Proto` from the proxy via
 `SECURE_PROXY_SSL_HEADER`. The proxy is also responsible for HSTS and any
-HTTP→HTTPS redirects.
+HTTP→HTTPS redirects, and **must** strip/rewrite `X-Forwarded-For` so a
+client can't spoof their source IP and bypass the per-IP throttle.
+
+## Configuration
+
+Every operational knob is overridable via `.env`. See
+[`collateral_provider/sample.env`](collateral_provider/sample.env) for the
+full list. The most useful overrides:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SKEY_PATH` / `VKEY_PATH` | `api/key/payment.{skey,vkey}` | Move signing keys outside the checkout in production. |
+| `COLLATERAL_THROTTLE_RATE` | `60/min` | Per-IP rate limit for `/<env>/collateral/`. |
+| `PREPROD_KOIOS_URL` / `MAINNET_KOIOS_URL` | Koios public hosting | Point at self-hosted Koios or alternate networks. |
+| `LOG_LEVEL` / `LOG_FILE` | `DEBUG`, `./debug.log` | Log severity / rotated-file path. |
+| `CACHE_DIR` | `./.cache` | File-based cache directory used by the throttle. |
+
+## Reporting security issues
+
+See [SECURITY.md](SECURITY.md). Short version: email
+support@logicalmechanism.io rather than opening a public issue.
