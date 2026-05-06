@@ -1,7 +1,15 @@
-# api/tests.py
+import os
+import tempfile
+
 from django.test import TestCase
 
-from api.signature import create_witness_cbor, sign, tx_id, verify
+from api.signature import (
+    create_witness_cbor,
+    get_key_from_file,
+    sign,
+    tx_id,
+    verify,
+)
 from api.tests.test_data import (
     invalid_tx_body_missing_collateral,
     valid_tx_body_cbor_with_collateral,
@@ -56,4 +64,43 @@ class SignatureTestCase(TestCase):
         witness_cbor = create_witness_cbor(pk, sig)
         answer = "820082582051c20cf4a8ed0e13cd65026625fe59d7ee8f8ef274a3d5575f8c30f9732cb3ed584077589916b53ea6abfb4e9793770bf5fbb0bbe153046e12b91365832f2c1558aec34dcf8544b15fbdd1946b32b10b38dfa70defaeb827d98a4f959539000df502"
         self.assertEqual(witness_cbor, answer)
+
+
+class GetKeyFromFileTestCase(TestCase):
+    def setUp(self):
+        # The lru_cache means tests can leak between each other; clear it
+        # before each test reads a tmp file with a new path.
+        get_key_from_file.cache_clear()
+
+    def test_strips_cbor_tag_prefix(self):
+        # 5820 is the CBOR tag for "byte string of length 32" — the leading 4
+        # hex chars in the cborHex value. The rest is the raw key material.
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".skey", delete=False) as f:
+            f.write('{"cborHex": "5820' + "ab" * 32 + '"}')
+            path = f.name
+        try:
+            key = get_key_from_file(path)
+            self.assertEqual(key, "ab" * 32)
+            self.assertEqual(len(key), 64)
+        finally:
+            os.unlink(path)
+
+    def test_missing_file_raises_oserror(self):
+        with self.assertRaises(OSError):
+            get_key_from_file("/nonexistent/path/payment.skey")
+
+    def test_caches_repeated_reads(self):
+        # If the cache works we avoid re-opening the file on every signing
+        # request, which is the entire reason it exists.
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".skey", delete=False) as f:
+            f.write('{"cborHex": "5820' + "cd" * 32 + '"}')
+            path = f.name
+        try:
+            first = get_key_from_file(path)
+            with open(path, "w") as f:
+                f.write('{"cborHex": "5820' + "ef" * 32 + '"}')
+            second = get_key_from_file(path)
+            self.assertEqual(first, second)
+        finally:
+            os.unlink(path)
 

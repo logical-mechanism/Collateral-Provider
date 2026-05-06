@@ -1,5 +1,10 @@
-from api.views import (ProvideCollateralView, custom_disallowed_host_handler,
-                       custom_page_not_found, known_hosts_view, landing_page)
+from api.views import (
+                       ProvideCollateralView,
+                       custom_disallowed_host_handler,
+                       custom_page_not_found,
+                       known_hosts_view,
+                       landing_page,
+)
 from django.urls import path, re_path
 
 urlpatterns = [

@@ -58,6 +58,10 @@ else:
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 INSTALLED_APPS = [
+    # auth + contenttypes are required because DRF imports User lazily for
+    # its default permission classes; we don't ship our own user system.
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
     'django.contrib.staticfiles',
     'rest_framework',
     'corsheaders',
@@ -66,9 +70,10 @@ INSTALLED_APPS = [
 
 # We don't use sessions, auth, or CSRF — this is a stateless public POST API.
 # Skip the corresponding middleware so each request doesn't pay for them.
+# Disallowed-host responses are formatted by handler400 in urls.py; we rely
+# on Django's built-in ALLOWED_HOSTS check rather than a custom middleware.
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # must precede CommonMiddleware
-    'api.middleware.HandleDisallowedHostMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -103,7 +108,7 @@ DATABASES = {
 
 # DRF's AnonRateThrottle stores per-IP request counts in the Django cache.
 # The default LocMemCache is per-process — under multi-worker gunicorn each
-# worker has its own counter, so the real ceiling is N×rate. File-based cache
+# worker has its own counter, so the real ceiling is N*rate. File-based cache
 # shares state across workers on the same host without requiring Redis.
 CACHES = {
     'default': {
