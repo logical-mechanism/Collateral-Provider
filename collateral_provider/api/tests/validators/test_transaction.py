@@ -1,26 +1,21 @@
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from rest_framework.exceptions import ValidationError
 
 from api.simulate import UpstreamUnavailable
 from api.validators.transaction import (
-    TransactionValidator,
     UpstreamServiceUnavailable,
+    check_valid_tx,
 )
 
 
 class TestTransactionValidator(unittest.TestCase):
-    def setUp(self):
-        self.mock_logger = Mock()
-        self.validator = TransactionValidator(self.mock_logger)
-
     @patch("api.validators.transaction.evaluate_transaction")
     def test_valid_tx_passes_silently(self, mock_eval):
         # Koios accepted the tx — response includes a 'result' key.
         mock_eval.return_value = {"jsonrpc": "2.0", "result": []}
-        # No exception expected.
-        self.validator.check_valid_tx("deadbeef", "preprod")
+        check_valid_tx("deadbeef", "preprod")
         mock_eval.assert_called_once_with("deadbeef", "preprod")
 
     @patch("api.validators.transaction.evaluate_transaction")
@@ -31,7 +26,7 @@ class TestTransactionValidator(unittest.TestCase):
             "error": {"code": -32602, "message": "Bad inputs"},
         }
         with self.assertRaises(ValidationError) as context:
-            self.validator.check_valid_tx("deadbeef", "preprod")
+            check_valid_tx("deadbeef", "preprod")
         self.assertIn("Transaction Fails Validation", str(context.exception.detail))
 
     @patch("api.validators.transaction.evaluate_transaction")
@@ -40,7 +35,7 @@ class TestTransactionValidator(unittest.TestCase):
         # surface that as a 400 — the user's tx might be perfectly valid.
         mock_eval.side_effect = UpstreamUnavailable("koios preprod timed out")
         with self.assertRaises(UpstreamServiceUnavailable) as context:
-            self.validator.check_valid_tx("deadbeef", "preprod")
+            check_valid_tx("deadbeef", "preprod")
         self.assertEqual(context.exception.status_code, 503)
         self.assertIn(
             "Validation Service Unavailable", str(context.exception.detail)

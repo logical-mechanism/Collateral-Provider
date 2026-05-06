@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from typing import ClassVar
 
 from django.conf import settings
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
@@ -22,7 +23,7 @@ class ProvideCollateralThrottle(throttling.AnonRateThrottle):
 
 
 class ProvideCollateralView(APIView):
-    throttle_classes = [ProvideCollateralThrottle]
+    throttle_classes: ClassVar[list] = [ProvideCollateralThrottle]
 
     def http_method_not_allowed(self, request, *args, **kwargs):
         ip_address = self.get_client_ip(request)
@@ -72,11 +73,8 @@ class ProvideCollateralView(APIView):
     def get_client_ip(self, request):
         x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
         if x_forwarded_for:
-            # Get the first IP from the list
-            ip = x_forwarded_for.split(',')[0]
-        else:
-            ip = request.META.get('REMOTE_ADDR')
-        return ip
+            return x_forwarded_for.split(',')[0].strip()
+        return request.META.get('REMOTE_ADDR')
 
 
 # very simply landing page that auto loads from the known.host.json file
@@ -85,7 +83,7 @@ def landing_page(request):
     parent_dir = os.path.abspath(os.path.join(settings.BASE_DIR, os.pardir))
     # Load the JSON file from the parent directory
     json_file_path = os.path.join(parent_dir, 'known.hosts.json')
-    with open(json_file_path, 'r') as json_file:
+    with open(json_file_path) as json_file:
         data = json.load(json_file)
     content = data.get(
         settings.PKH, "Public Key Hash Not Found In Known Hosts")
@@ -154,7 +152,7 @@ def known_hosts_view(request):
     # Load the JSON file from the parent directory
     json_file_path = os.path.join(parent_dir, 'known.hosts.json')
     try:
-        with open(json_file_path, 'r') as json_file:
+        with open(json_file_path) as json_file:
             data = json.load(json_file)
     except FileNotFoundError:
         return JsonResponse({'error': 'File Not Found'}, status=404)

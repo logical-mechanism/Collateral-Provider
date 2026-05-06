@@ -1,7 +1,12 @@
 # api/tests.py
 from django.test import TestCase
-from api.signature import verify, sign, tx_id, create_witness_cbor
-from api.tests.test_data import valid_tx_body_cbor_with_collateral, invalid_tx_body_missing_collateral
+
+from api.signature import create_witness_cbor, sign, tx_id, verify
+from api.tests.test_data import (
+    invalid_tx_body_missing_collateral,
+    valid_tx_body_cbor_with_collateral,
+)
+
 
 class SignatureTestCase(TestCase):
 

@@ -6,12 +6,14 @@ from django.test import TestCase
 from api.serializers import ProvideCollateralSerializer
 
 from .test_big_data import invalid_tx_body_too_big
-from .test_data import (invalid_tx_body_cbor_is_invalid_is_set,
-                        invalid_tx_body_cbor_is_lying,
-                        invalid_tx_body_cbor_missing_inputs,
-                        invalid_tx_body_cbor_spending_collateral,
-                        invalid_tx_body_missing_collateral,
-                        valid_tx_body_cbor_but_no_collateral)
+from .test_data import (
+    invalid_tx_body_cbor_is_invalid_is_set,
+    invalid_tx_body_cbor_is_lying,
+    invalid_tx_body_cbor_missing_inputs,
+    invalid_tx_body_cbor_spending_collateral,
+    invalid_tx_body_missing_collateral,
+    valid_tx_body_cbor_but_no_collateral,
+)
 
 
 class ProvideCollateralSerializerTestCase(TestCase):

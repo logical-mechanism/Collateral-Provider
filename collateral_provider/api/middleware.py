@@ -30,9 +30,9 @@ class HandleDisallowedHostMiddleware:
             return response
         except DisallowedHost as e:
             # If DisallowedHost is raised, log the warning
-            logger.warning(f"DisallowedHost: {str(e)} - Host: {request.META.get('HTTP_HOST', 'unknown')}")
+            logger.warning(f"DisallowedHost: {e!s} - Host: {request.META.get('HTTP_HOST', 'unknown')}")
             return HttpResponseBadRequest("Invalid Host Header")
         except Exception as e:
             # Optionally catch any other exceptions
-            logger.error(f"Unexpected Error: {str(e)}")
+            logger.error(f"Unexpected Error: {e!s}")
             return HttpResponseBadRequest("An Error Occurred")

@@ -1,7 +1,11 @@
+import logging
+
 from rest_framework.exceptions import APIException
 
 from api.simulate import UpstreamUnavailable, evaluate_transaction
-from api.util import log_and_raise_error
+from api.util import raise_validation_error
+
+logger = logging.getLogger("api")
 
 
 class UpstreamServiceUnavailable(APIException):
@@ -10,15 +14,15 @@ class UpstreamServiceUnavailable(APIException):
     default_code = "upstream_unavailable"
 
 
-class TransactionValidator:
-    def __init__(self, logger):
-        self.logger = logger
-
-    def check_valid_tx(self, tx_body_cbor, environment):
-        try:
-            response = evaluate_transaction(tx_body_cbor, environment)
-        except UpstreamUnavailable as exc:
-            self.logger.error(f"Upstream Evaluation Unavailable: {exc}")
-            raise UpstreamServiceUnavailable() from exc
-        if "result" not in response:
-            log_and_raise_error(self.logger, "Transaction Fails Validation")
+def check_valid_tx(tx_body_cbor: str, environment: str) -> None:
+    """Ask Koios to evaluate the transaction. A response with a 'result' key
+    means the tx is structurally and economically valid; anything else means
+    it would be rejected by the chain. Network/upstream failures surface as
+    503 instead of being misreported as a bad-tx 400."""
+    try:
+        response = evaluate_transaction(tx_body_cbor, environment)
+    except UpstreamUnavailable as exc:
+        logger.error(f"Upstream Evaluation Unavailable: {exc}")
+        raise UpstreamServiceUnavailable() from exc
+    if "result" not in response:
+        raise_validation_error("Transaction Fails Validation")

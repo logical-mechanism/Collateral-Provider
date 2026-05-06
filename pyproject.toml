@@ -1,0 +1,33 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["venv", "staticfiles", "migrations"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    # The cbor test file has long inline hex blobs as test fixtures; allow them.
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use bare assertions and patch decorators that look like unused arguments.
+"**/tests/**" = ["B011"]
+
+[tool.coverage.run]
+branch = true
+source = ["collateral_provider/api"]
+omit = ["**/migrations/*", "**/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
