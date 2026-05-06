@@ -16,6 +16,7 @@ from drf_spectacular.utils import (
     inline_serializer,
 )
 from rest_framework import serializers, status, throttling
+from rest_framework.decorators import api_view, throttle_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -135,6 +136,61 @@ class ProvideCollateralView(APIView):
         witness_cbor = witness_tx_cbor(tx_body_cbor, settings.SKEY_PATH, settings.VKEY_PATH)
         logger.info("Witnessed tx: ip=%s env=%s", ip_address, environment)
         return Response({"witness": witness_cbor}, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    operation_id="healthz",
+    summary="Liveness/readiness check",
+    description=(
+        "Returns 200 if the service is configured well enough to serve "
+        "signing requests (signing keys readable, known_hosts.json present). "
+        "Returns 503 with a list of problems otherwise. Suitable for "
+        "container/load-balancer health probes; not rate limited."
+    ),
+    responses={
+        200: OpenApiResponse(
+            response=inline_serializer(
+                name="HealthOk",
+                fields={
+                    "status": serializers.CharField(),
+                    "version": serializers.CharField(),
+                },
+            ),
+            description="Service ready.",
+        ),
+        503: OpenApiResponse(
+            response=inline_serializer(
+                name="HealthError",
+                fields={
+                    "status": serializers.CharField(),
+                    "problems": serializers.ListField(child=serializers.CharField()),
+                },
+            ),
+            description="Service has critical config problems.",
+        ),
+    },
+)
+@api_view(["GET"])
+@throttle_classes([])
+def healthz_view(request):
+    problems = []
+    for label, path in (("skey", settings.SKEY_PATH), ("vkey", settings.VKEY_PATH)):
+        if not os.path.exists(path):
+            problems.append(f"{label} missing at {path}")
+        elif not os.access(path, os.R_OK):
+            problems.append(f"{label} not readable at {path}")
+    if not os.path.exists(_known_hosts_path()):
+        problems.append(f"known_hosts missing at {_known_hosts_path()}")
+
+    if problems:
+        return Response(
+            {"status": "error", "problems": problems},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return Response(
+        {"status": "ok", "version": settings.SPECTACULAR_SETTINGS["VERSION"]},
+        status=status.HTTP_200_OK,
+    )
 
 
 def landing_page(request):

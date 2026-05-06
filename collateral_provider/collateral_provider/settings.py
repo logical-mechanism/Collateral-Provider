@@ -78,6 +78,7 @@ INSTALLED_APPS = [
 # on Django's built-in ALLOWED_HOSTS check rather than a custom middleware.
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # must precede CommonMiddleware
+    'api.middleware.RequestIDMiddleware',     # stamp X-Request-ID before anything logs
     'django.middleware.security.SecurityMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -159,17 +160,24 @@ SPECTACULAR_SETTINGS = {
 
 CORS_ALLOW_ALL_ORIGINS = True
 
-# Logging configuration
+# Logging configuration. Every record gets a request_id field via the
+# RequestIDLogFilter (which reads from a contextvar set by RequestIDMiddleware).
+# Outside a request the id is "-".
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'filters': {
+        'request_id': {
+            '()': 'api.middleware.RequestIDLogFilter',
+        },
+    },
     'formatters': {
         'verbose': {
-            'format': '{levelname} {asctime} {module} {message}',
+            'format': '{levelname} {asctime} [{request_id}] {module} {message}',
             'style': '{',
         },
         'simple': {
-            'format': '{levelname} {message}',
+            'format': '{levelname} [{request_id}] {message}',
             'style': '{',
         },
     },
@@ -178,12 +186,14 @@ LOGGING = {
             'level': 'DEBUG',
             'class': 'logging.StreamHandler',
             'formatter': 'simple',
+            'filters': ['request_id'],
         },
         'file': {
             'level': 'DEBUG',
             'class': 'logging.handlers.RotatingFileHandler',
             'filename': os.path.join(BASE_DIR, 'debug.log'),
             'formatter': 'verbose',
+            'filters': ['request_id'],
             'maxBytes': 1024 * 1024 * 1,
             'backupCount': 3,
         },
@@ -191,7 +201,7 @@ LOGGING = {
     'loggers': {
         'django': {
             'handlers': ['file'],
-            'level': 'DEBUG',
+            'level': 'INFO',
             'propagate': True,
         },
         'api': {
@@ -201,7 +211,7 @@ LOGGING = {
         },
         'django.security.DisallowedHost': {
             'handlers': ['file'],
-            'level': 'WARNING',  # Reduce the log level to WARNING
+            'level': 'WARNING',
             'propagate': False,
         },
     },
