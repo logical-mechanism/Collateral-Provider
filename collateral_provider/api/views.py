@@ -5,7 +5,12 @@ from functools import lru_cache
 from typing import ClassVar
 
 from django.conf import settings
-from django.http import HttpResponseBadRequest, JsonResponse
+from django.http import (
+    HttpResponse,
+    HttpResponseBadRequest,
+    HttpResponseNotFound,
+    JsonResponse,
+)
 from django.shortcuts import redirect, render
 from drf_spectacular.utils import (
     OpenApiExample,
@@ -15,6 +20,7 @@ from drf_spectacular.utils import (
     extend_schema_view,
     inline_serializer,
 )
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from rest_framework import serializers, status, throttling
 from rest_framework.decorators import api_view, throttle_classes
 from rest_framework.response import Response
@@ -192,6 +198,25 @@ def healthz_view(request):
         {"status": "ok", "version": settings.SPECTACULAR_SETTINGS["VERSION"]},
         status=status.HTTP_200_OK,
     )
+
+
+def metrics_view(request):
+    """Prometheus exposition endpoint.
+
+    Off by default (METRICS_ENABLED=False) — when off the path returns 404
+    and isn't documented in the OpenAPI schema, so a casual scraper has no
+    indication the service exposes metrics at all. When on, restricted to
+    METRICS_ALLOW_IPS (defaults to localhost only), so a publicly-exposed
+    deployment doesn't accidentally serve cluster-internal observability
+    data to the world.
+    """
+    if not settings.METRICS_ENABLED:
+        return HttpResponseNotFound()
+    client_ip = _client_ip(request)
+    if client_ip not in settings.METRICS_ALLOW_IPS:
+        logger.warning("Rejected /metrics from non-allowed IP: %s", client_ip)
+        return HttpResponse(status=403)
+    return HttpResponse(generate_latest(), content_type=CONTENT_TYPE_LATEST)
 
 
 def landing_page(request):

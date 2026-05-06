@@ -1,6 +1,10 @@
 import logging
+import re
+import time
 import uuid
 from contextvars import ContextVar
+
+from api.metrics import http_request_duration_seconds, http_requests_total
 
 # Default "-" is what shows up in logs emitted outside any request (startup,
 # management commands, ad-hoc shell). Real request IDs are 12 hex chars.
@@ -49,3 +53,37 @@ class RequestIDLogFilter(logging.Filter):
     def filter(self, record):
         record.request_id = get_request_id()
         return True
+
+
+# Pattern for the only path we care to measure. Other paths (/, /healthz,
+# /known_hosts/, /api/docs/) are either trivial or scraped infrequently.
+_COLLATERAL_PATH_RE = re.compile(r"^/(?P<env>[^/]+)/collateral/?$")
+
+
+class MetricsMiddleware:
+    """Count and time requests to the /<env>/collateral/ endpoint.
+
+    Deliberately scoped: we don't want a label per URL path or per IP
+    (cardinality + privacy). Other endpoints rely on Koios-specific metrics
+    in api/metrics.py or aren't worth observing.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        match = _COLLATERAL_PATH_RE.match(request.path)
+        if not match:
+            return self.get_response(request)
+
+        env = match.group("env")
+        started = time.monotonic()
+        response = self.get_response(request)
+        http_request_duration_seconds.labels(environment=env).observe(
+            time.monotonic() - started
+        )
+        http_requests_total.labels(
+            environment=env,
+            status=str(response.status_code),
+        ).inc()
+        return response

@@ -1,7 +1,10 @@
 import logging
+import time
 
 import requests
 from django.conf import settings
+
+from api.metrics import koios_request_duration_seconds, koios_requests_total
 
 logger = logging.getLogger("api")
 
@@ -34,6 +37,7 @@ def evaluate_transaction(
     """
     env_settings = settings.ENVIRONMENTS.get(environment)
     if not env_settings:
+        # Don't burn a metrics label on unknown envs.
         raise UpstreamUnavailable(f"unknown environment: {environment}")
 
     url = env_settings["KOIOS_URL"]
@@ -46,16 +50,36 @@ def evaluate_transaction(
         "accept": "application/json",
         "content-type": "application/json",
     }
+
+    started = time.monotonic()
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=timeout)
         response.raise_for_status()
-        return response.json()
+        body = response.json()
     except requests.Timeout as exc:
+        koios_requests_total.labels(environment=environment, outcome="timeout").inc()
         logger.warning("Koios timeout for %s: %s", environment, exc)
         raise UpstreamUnavailable(f"koios {environment} timed out") from exc
+    except requests.HTTPError as exc:
+        koios_requests_total.labels(environment=environment, outcome="http_error").inc()
+        logger.warning("Koios returned non-2xx for %s: %s", environment, exc)
+        raise UpstreamUnavailable(f"koios {environment} non-2xx") from exc
     except requests.RequestException as exc:
+        koios_requests_total.labels(environment=environment, outcome="request_error").inc()
         logger.warning("Koios request failed for %s: %s", environment, exc)
         raise UpstreamUnavailable(f"koios {environment} request failed") from exc
     except ValueError as exc:
+        koios_requests_total.labels(environment=environment, outcome="invalid_json").inc()
         logger.warning("Koios returned non-JSON for %s: %s", environment, exc)
         raise UpstreamUnavailable(f"koios {environment} returned invalid json") from exc
+    finally:
+        koios_request_duration_seconds.labels(environment=environment).observe(
+            time.monotonic() - started
+        )
+
+    # 2xx response. The caller decides whether it represents a valid tx
+    # (has 'result') or an invalid one (has 'error', no 'result'). We
+    # record the outcome here so we can graph each separately.
+    outcome = "success" if "result" in body else "tx_invalid"
+    koios_requests_total.labels(environment=environment, outcome=outcome).inc()
+    return body

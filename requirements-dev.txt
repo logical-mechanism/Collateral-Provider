@@ -108,6 +108,8 @@ pip-tools==7.5.3
     # via -r requirements-dev.in
 pluggy==1.6.0
     # via pytest
+prometheus-client==0.25.0
+    # via -r requirements.in
 psutil==7.2.2
     # via locust
 pycparser==3.0

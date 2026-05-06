@@ -5,6 +5,7 @@ from api.views import (
     healthz_view,
     known_hosts_view,
     landing_page,
+    metrics_view,
 )
 from django.urls import path, re_path
 from drf_spectacular.views import (
@@ -18,6 +19,7 @@ urlpatterns = [
     re_path(r"^(?P<environment>[^/]+)/collateral/?$", ProvideCollateralView.as_view(), name="collateral"),
     re_path(r"^known_hosts/?$", known_hosts_view, name="known_hosts"),
     re_path(r"^healthz/?$", healthz_view, name="healthz"),
+    re_path(r"^metrics/?$", metrics_view, name="metrics"),
 
     # OpenAPI schema + interactive docs
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),

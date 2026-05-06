@@ -72,6 +72,12 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 # Collateral endpoint throttle (per anonymous IP).
 COLLATERAL_THROTTLE_RATE = env('COLLATERAL_THROTTLE_RATE', default='60/min')
 
+# Prometheus /metrics. Off by default — when off, the URL 404s. When on,
+# only IPs in METRICS_ALLOW_IPS (default: localhost) can reach it. Run
+# your scraper on the same host or behind a private network.
+METRICS_ENABLED = env.bool('METRICS_ENABLED', default=False)
+METRICS_ALLOW_IPS = env.list('METRICS_ALLOW_IPS', default=['127.0.0.1', '::1'])
+
 INSTALLED_APPS = [
     # auth + contenttypes are required because DRF imports User lazily for
     # its default permission classes; we don't ship our own user system.
@@ -91,6 +97,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # must precede CommonMiddleware
     'api.middleware.RequestIDMiddleware',     # stamp X-Request-ID before anything logs
+    'api.middleware.MetricsMiddleware',       # measure /collateral request count + duration
     'django.middleware.security.SecurityMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
