@@ -1,6 +1,7 @@
 import logging
 
 import requests
+from django.conf import settings
 
 logger = logging.getLogger("api")
 
@@ -26,7 +27,16 @@ def evaluate_transaction(
     invalid one ('error'). Raises UpstreamUnavailable for anything that isn't
     a real verdict from Koios — network errors, timeouts, non-2xx HTTP, or
     non-JSON bodies.
+
+    The endpoint URL is taken from settings.ENVIRONMENTS[<env>]['KOIOS_URL']
+    so operators can self-host Koios or use alternate networks (preview,
+    sanchonet) without changing code.
     """
+    env_settings = settings.ENVIRONMENTS.get(environment)
+    if not env_settings:
+        raise UpstreamUnavailable(f"unknown environment: {environment}")
+
+    url = env_settings["KOIOS_URL"]
     payload = {
         "jsonrpc": "2.0",
         "method": "evaluateTransaction",
@@ -36,18 +46,16 @@ def evaluate_transaction(
         "accept": "application/json",
         "content-type": "application/json",
     }
-    prefix = "api" if environment == "mainnet" else environment
-    url = f"https://{prefix}.koios.rest/api/v1/ogmios"
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=timeout)
         response.raise_for_status()
         return response.json()
     except requests.Timeout as exc:
-        logger.warning(f"Koios timeout for {prefix}: {exc}")
-        raise UpstreamUnavailable(f"koios {prefix} timed out") from exc
+        logger.warning("Koios timeout for %s: %s", environment, exc)
+        raise UpstreamUnavailable(f"koios {environment} timed out") from exc
     except requests.RequestException as exc:
-        logger.warning(f"Koios request failed for {prefix}: {exc}")
-        raise UpstreamUnavailable(f"koios {prefix} request failed") from exc
+        logger.warning("Koios request failed for %s: %s", environment, exc)
+        raise UpstreamUnavailable(f"koios {environment} request failed") from exc
     except ValueError as exc:
-        logger.warning(f"Koios returned non-JSON for {prefix}: {exc}")
-        raise UpstreamUnavailable(f"koios {prefix} returned invalid json") from exc
+        logger.warning("Koios returned non-JSON for %s: %s", environment, exc)
+        raise UpstreamUnavailable(f"koios {environment} returned invalid json") from exc

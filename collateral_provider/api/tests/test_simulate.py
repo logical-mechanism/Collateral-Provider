@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import requests
+from django.test import override_settings
 
 from api.simulate import UpstreamUnavailable, evaluate_transaction
 
@@ -15,7 +16,7 @@ class TestEvaluateTransaction(unittest.TestCase):
         result = evaluate_transaction("deadbeef", "preprod")
         self.assertEqual(result, {"jsonrpc": "2.0", "result": []})
 
-        # Sanity check: the URL is constructed correctly per environment.
+        # The URL comes from settings.ENVIRONMENTS[<env>]['KOIOS_URL'].
         call_url = mock_post.call_args[0][0]
         self.assertEqual(call_url, "https://preprod.koios.rest/api/v1/ogmios")
 
@@ -29,11 +30,39 @@ class TestEvaluateTransaction(unittest.TestCase):
         self.assertEqual(call_url, "https://api.koios.rest/api/v1/ogmios")
 
     @patch("api.simulate.requests.post")
+    def test_unknown_environment_raises_upstream_unavailable(self, mock_post):
+        # Unknown env can't be routed — fail fast without making a request.
+        with self.assertRaises(UpstreamUnavailable):
+            evaluate_transaction("deadbeef", "fakenet")
+        mock_post.assert_not_called()
+
+    @patch("api.simulate.requests.post")
+    def test_url_can_be_overridden_via_settings(self, mock_post):
+        # Operators self-hosting Koios can swap the URL in env without code
+        # changes.
+        mock_post.return_value.raise_for_status = Mock()
+        mock_post.return_value.json.return_value = {"result": []}
+
+        with override_settings(ENVIRONMENTS={
+            "preprod": {
+                "NETWORK": "--testnet-magic 1",
+                "TXID": "00" * 32,
+                "TXIDX": 0,
+                "KOIOS_URL": "https://my-koios.example.com/ogmios",
+            },
+        }):
+            evaluate_transaction("deadbeef", "preprod")
+        self.assertEqual(
+            mock_post.call_args[0][0],
+            "https://my-koios.example.com/ogmios",
+        )
+
+    @patch("api.simulate.requests.post")
     def test_payload_carries_jsonrpc_envelope(self, mock_post):
         mock_post.return_value.raise_for_status = Mock()
         mock_post.return_value.json.return_value = {"result": []}
 
-        evaluate_transaction("cafebabe", "preview")
+        evaluate_transaction("cafebabe", "mainnet")
         sent_json = mock_post.call_args.kwargs["json"]
         self.assertEqual(sent_json["jsonrpc"], "2.0")
         self.assertEqual(sent_json["method"], "evaluateTransaction")
@@ -54,7 +83,6 @@ class TestEvaluateTransaction(unittest.TestCase):
 
     @patch("api.simulate.requests.post")
     def test_5xx_raises_upstream_unavailable(self, mock_post):
-        # raise_for_status raises HTTPError on non-2xx — that's a RequestException.
         response = Mock()
         response.raise_for_status.side_effect = requests.HTTPError("500 Server Error")
         mock_post.return_value = response
@@ -76,5 +104,4 @@ class TestEvaluateTransaction(unittest.TestCase):
         mock_post.return_value.json.return_value = {"result": []}
 
         evaluate_transaction("deadbeef", "preprod")
-        # Default is the (connect, read) tuple.
         self.assertIsNotNone(mock_post.call_args.kwargs.get("timeout"))

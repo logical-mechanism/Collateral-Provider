@@ -18,24 +18,32 @@ if not os.path.exists(env_file):
 env = environ.Env()
 environ.Env.read_env(env_file)
 
-# Add your variables here
+# Identity / signing material. Both key paths default to the api/key dir
+# bundled with the repo (used in dev and tests); production deploys should
+# override SKEY_PATH and VKEY_PATH to point at locations outside the
+# checkout (e.g. /etc/collateral-provider/keys).
 PKH = env('PKH')
-SKEY_PATH = os.path.join(BASE_DIR, 'api/key/payment.skey')
-VKEY_PATH = os.path.join(BASE_DIR, 'api/key/payment.vkey')
+SKEY_PATH = env('SKEY_PATH', default=str(BASE_DIR / 'api' / 'key' / 'payment.skey'))
+VKEY_PATH = env('VKEY_PATH', default=str(BASE_DIR / 'api' / 'key' / 'payment.vkey'))
 SECRET_KEY = env('DJANGO_SECRET_KEY')
 ENVIRONMENT = env('ENVIRONMENT')
 
-# uncomment the networks being used
+# Per-network configuration. KOIOS_URL is the JSON-RPC ogmios endpoint we
+# POST evaluateTransaction to. Defaults match Koios's public hosting for
+# preprod/mainnet; override for self-hosted Koios or alternate networks
+# (preview, sanchonet, ...).
 ENVIRONMENTS = {
     'preprod': {
-        'NETWORK': env("PREPROD_NETWORK"),
+        'NETWORK': env('PREPROD_NETWORK'),
         'TXID': env('PREPROD_TXID'),
         'TXIDX': env.int('PREPROD_TXIDX'),
+        'KOIOS_URL': env('PREPROD_KOIOS_URL', default='https://preprod.koios.rest/api/v1/ogmios'),
     },
     'mainnet': {
-        'NETWORK': env("MAINNET_NETWORK"),
+        'NETWORK': env('MAINNET_NETWORK'),
         'TXID': env('MAINNET_TXID'),
         'TXIDX': env.int('MAINNET_TXIDX'),
+        'KOIOS_URL': env('MAINNET_KOIOS_URL', default='https://api.koios.rest/api/v1/ogmios'),
     },
 }
 
@@ -133,15 +141,15 @@ USE_TZ = True
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# DRF defaults. We do not set DEFAULT_THROTTLE_CLASSES — every endpoint
+# states its own throttling explicitly (or @throttle_classes([])).
+# A global default is a footgun: a new endpoint would silently inherit
+# whatever rate is in effect.
 REST_FRAMEWORK = {
-    'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.AnonRateThrottle',
-    ],
-    'DEFAULT_THROTTLE_RATES': {
-        # keep this at 1 as the worst case fallback
-        'anon': '1/min',
-    },
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': COLLATERAL_THROTTLE_RATE,  # only consulted by AnonRateThrottle subclasses
+    },
 }
 
 SPECTACULAR_SETTINGS = {
@@ -160,9 +168,15 @@ SPECTACULAR_SETTINGS = {
 
 CORS_ALLOW_ALL_ORIGINS = True
 
-# Logging configuration. Every record gets a request_id field via the
-# RequestIDLogFilter (which reads from a contextvar set by RequestIDMiddleware).
-# Outside a request the id is "-".
+# Logging. LOG_LEVEL controls the api logger; LOG_FILE is where we write
+# (rotated at 1 MiB x 3 backups). The defaults preserve the existing
+# debug.log path so existing logrotate / monitoring keep working.
+LOG_LEVEL = env('LOG_LEVEL', default='DEBUG')
+LOG_FILE = env('LOG_FILE', default=str(BASE_DIR / 'debug.log'))
+
+# Every record gets a request_id field via the RequestIDLogFilter, which
+# reads from a contextvar set by RequestIDMiddleware. Outside a request
+# (startup, management commands) the id is "-".
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -189,9 +203,9 @@ LOGGING = {
             'filters': ['request_id'],
         },
         'file': {
-            'level': 'DEBUG',
+            'level': LOG_LEVEL,
             'class': 'logging.handlers.RotatingFileHandler',
-            'filename': os.path.join(BASE_DIR, 'debug.log'),
+            'filename': LOG_FILE,
             'formatter': 'verbose',
             'filters': ['request_id'],
             'maxBytes': 1024 * 1024 * 1,
@@ -206,7 +220,7 @@ LOGGING = {
         },
         'api': {
             'handlers': ['file'],
-            'level': 'DEBUG',
+            'level': LOG_LEVEL,
             'propagate': False,
         },
         'django.security.DisallowedHost': {
