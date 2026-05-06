@@ -5,3 +5,5 @@ captcha/
 *.sock
 db.sqlite3
 .cache/
+.coverage
+htmlcov/
