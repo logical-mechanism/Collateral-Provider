@@ -5,9 +5,16 @@ import cbor2
 from nacl.signing import SigningKey, VerifyKey
 from nacl.exceptions import BadSignatureError
 from nacl.encoding import RawEncoder
-from pycardano.serialization import (
-    OrderedSet,
-)
+
+# CBOR tag 258 is the registered "set" tag used by Cardano (Conway era)
+# for inputs, collateral inputs, certificates, required signers, reference
+# inputs, and proposal procedures. We sort the contents and wrap them in
+# this tag to canonicalize the body before hashing.
+CARDANO_SET_TAG = 258
+
+
+def _ordered_set(items):
+    return cbor2.CBORTag(CARDANO_SET_TAG, sorted(items))
 
 def get_key_from_file(file_path: str) -> str:
     """
@@ -87,32 +94,19 @@ def tx_id(tx_cbor: str) -> str:
     tx = cbor2.loads(tx_bytes)
     tx_body = tx[0]
 
-    # we need to reorder the things that are sets
-
-    # inputs
-    tx_body[0] = OrderedSet(sorted(tx_body[0]), use_tag=True).to_primitive()
-    # this may not exist
-    try:
-        # certificates
-        tx_body[4] = OrderedSet(sorted(tx_body[4]), use_tag=True).to_primitive()
-    except KeyError:
-        pass
-    # collateral inputs
-    tx_body[13] = OrderedSet(sorted(tx_body[13]), use_tag=True).to_primitive()
-    # required signers
-    tx_body[14] = OrderedSet(sorted(tx_body[14]), use_tag=True).to_primitive()
-    # this may not exist
-    try:
-        # reference inputs
-        tx_body[18] = OrderedSet(sorted(tx_body[18]), use_tag=True).to_primitive()
-    except KeyError:
-        pass
-    # this may not exist
-    try:
-        # proposal_procedures
-        tx_body[20] = OrderedSet(sorted(tx_body[20]), use_tag=True).to_primitive()
-    except KeyError:
-        pass
+    # Canonicalize every set-typed body field by sorting and re-wrapping in
+    # CBOR tag 258. The hash will not match what the node computes otherwise.
+    SET_FIELDS = (
+        0,   # inputs
+        4,   # certificates (optional)
+        13,  # collateral inputs
+        14,  # required signers
+        18,  # reference inputs (optional)
+        20,  # proposal procedures (optional)
+    )
+    for idx in SET_FIELDS:
+        if idx in tx_body:
+            tx_body[idx] = _ordered_set(tx_body[idx])
 
     # all the sets are taken place so now we can dump it and hash it
     tx_body_cbor = cbor2.dumps(tx_body).hex()

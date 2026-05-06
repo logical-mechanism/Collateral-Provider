@@ -1,0 +1,10 @@
+# Dev/test/tooling dependencies. Lockfile is requirements-dev.txt — regenerate with:
+#   pip-compile requirements-dev.in
+# Includes everything in requirements.in plus the tools below.
+
+-r requirements.in
+
+pip-tools~=7.5
+ruff~=0.7
+coverage~=7.6
+locust~=2.32

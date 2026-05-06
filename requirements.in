@@ -1,0 +1,14 @@
+# Direct runtime dependencies. Lockfile is requirements.txt — regenerate with:
+#   pip-compile requirements.in
+# Bound to compatible-release (~=) so security patches flow in on recompile.
+
+Django~=5.2.0
+djangorestframework~=3.15
+django-cors-headers~=4.4
+django-environ~=0.11
+
+cbor2~=5.6
+PyNaCl~=1.5
+requests~=2.32
+
+gunicorn~=23.0
