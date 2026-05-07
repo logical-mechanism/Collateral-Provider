@@ -116,10 +116,15 @@ def create_witness_cbor(public_key: str, signature: str) -> str:
     ).hex()
 
 
-def witness_tx_cbor(tx_cbor: str, skey_path: str, vkey_path: str) -> str:
-    """Hash the body, sign it with the on-disk skey, return the witness CBOR."""
+def witness_tx_cbor(tx_cbor: str, skey_path: str, vkey_path: str) -> tuple[str, str]:
+    """Hash the body, sign it with the on-disk skey, return ``(witness_cbor, tx_hash)``.
+
+    The tx hash is exposed so callers can log it on success — operators
+    can grep "did we sign tx X" in structured logs without needing the
+    request id from the original caller.
+    """
     sk = get_key_from_file(skey_path)
     pk = get_key_from_file(vkey_path)
     tx_hash = tx_id(tx_cbor)
     sig = sign(sk, tx_hash)
-    return create_witness_cbor(pk, sig)
+    return create_witness_cbor(pk, sig), tx_hash

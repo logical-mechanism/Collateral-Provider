@@ -97,3 +97,10 @@ hardening:
       becomes per-instance (effective rate = `N * COLLATERAL_THROTTLE_RATE`).
       Either keep `instance_count: 1` or wire in a shared cache (e.g.
       DO Managed Redis + `django-redis`) before scaling.
+- [ ] Concurrency math: gunicorn runs `gthread` workers, so a single
+      instance can hold roughly `workers * threads` requests in flight
+      (default `2 * 8 = 16`). The bottleneck per request is the Koios
+      RTT — most requests finish in well under a second, but a slow
+      Koios spell can pin threads. Bump `--threads` (cheap) before
+      `--workers` (more memory) if `/metrics` shows the duration
+      histogram drifting up.

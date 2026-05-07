@@ -1,10 +1,11 @@
 """Optional ``additional_utxos`` request field.
 
 Forwards to Ogmios as ``additionalUtxo`` so script evaluation can see UTxOs
-created by transactions not yet on chain. Per-design: missing or empty is
-fine and skipped silently; non-empty is forwarded verbatim — Koios returns
-a real verdict if the inner shape is wrong, which surfaces to the caller as
-a normal `Transaction Fails Validation` 400.
+created by transactions not yet on chain. Missing or empty is skipped
+silently; entries must be ``[txin, txout]`` pairs of objects. Anything
+else is rejected locally so we don't pay a Koios round-trip just to be
+told the shape is wrong, and so the JSON-encoded payload can't exceed
+``ADDITIONAL_UTXOS_MAX_BYTES``.
 """
 
 from unittest.mock import patch
@@ -72,14 +73,10 @@ class TestAdditionalUtxosPassThrough(TestCase):
         self.assertEqual(mock_eval.call_args.kwargs.get("additional_utxos"), extra)
 
     @patch("api.validators.transaction.evaluate_transaction")
-    def test_malformed_inner_entry_is_still_passed_through(self, mock_eval):
-        # Per design we do not mirror Ogmios's UTxO schema. If the user
-        # sends an inner shape that's wrong, Koios returns a real verdict
-        # and the request 400s with our standard tx-fails-validation message.
-        mock_eval.return_value = {
-            "jsonrpc": "2.0",
-            "error": {"code": -32602, "message": "Bad UTxO"},
-        }
+    def test_malformed_pair_rejected_locally_no_upstream_call(self, mock_eval):
+        # An entry that isn't a 2-element [txin, txout] pair fails the
+        # serializer's structural check before we issue the Koios call —
+        # so the upstream is never reached.
         response = self.client.post(
             self.url,
             {
@@ -89,4 +86,27 @@ class TestAdditionalUtxosPassThrough(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 400, response.content)
-        self.assertIn("Transaction Fails Validation", response.json()["detail"])
+        self.assertIn("[txin, txout]", response.json()["detail"])
+        mock_eval.assert_not_called()
+
+    @patch("api.validators.transaction.evaluate_transaction")
+    def test_oversized_additional_utxos_rejected_locally(self, mock_eval):
+        # Build a payload that exceeds ADDITIONAL_UTXOS_MAX_BYTES (32 KiB)
+        # by stuffing a giant string into a valid-shape entry.
+        bloat = "x" * 40_000
+        response = self.client.post(
+            self.url,
+            {
+                "tx": build_happy_path_tx_cbor(),
+                "additional_utxos": [
+                    [
+                        {"transaction": {"id": "a" * 64}, "index": 0},
+                        {"address": "addr_test1qz...", "memo": bloat},
+                    ]
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("exceeds", response.json()["detail"])
+        mock_eval.assert_not_called()

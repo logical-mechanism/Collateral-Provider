@@ -1,4 +1,5 @@
 import logging
+from typing import NoReturn
 
 from rest_framework import serializers
 from rest_framework.views import exception_handler as drf_exception_handler
@@ -6,7 +7,7 @@ from rest_framework.views import exception_handler as drf_exception_handler
 logger = logging.getLogger("api")
 
 
-def raise_validation_error(message: str) -> None:
+def raise_validation_error(message: str) -> NoReturn:
     """Log and raise a DRF ValidationError. Use for any client-facing input
     error that should surface as a 400 with the given message.
 
@@ -34,8 +35,8 @@ def normalize_error_response(exc, context):
 
     DRF's default returns {field: [msg]} for serializer validation errors and
     {"detail": msg} for everything else. Clients shouldn't have to handle
-    both shapes, especially since field names leak our internal structure
-    (e.g. tx_body). Surface the first human-readable message under "detail"
+    both shapes, especially since the field names would leak our internal
+    structure. Surface the first human-readable message under "detail"
     and call it a day.
     """
     response = drf_exception_handler(exc, context)

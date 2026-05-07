@@ -57,7 +57,7 @@ class TestHappyPath(TestCase):
         tx_cbor = build_happy_path_tx_cbor()
 
         response = self.client.post(
-            self.url, {"tx_body": tx_cbor}, format="json"
+            self.url, {"tx": tx_cbor}, format="json"
         )
 
         self.assertEqual(response.status_code, 200, response.content)
@@ -76,7 +76,7 @@ class TestHappyPath(TestCase):
         tx_cbor = build_happy_path_tx_cbor()
 
         response = self.client.post(
-            self.url, {"tx_body": tx_cbor}, format="json"
+            self.url, {"tx": tx_cbor}, format="json"
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("Transaction Fails Validation", str(response.content))
@@ -88,7 +88,7 @@ class TestHappyPath(TestCase):
         tx_cbor = build_happy_path_tx_cbor()
 
         response = self.client.post(
-            self.url, {"tx_body": tx_cbor}, format="json"
+            self.url, {"tx": tx_cbor}, format="json"
         )
         self.assertEqual(response.status_code, 503)
 
@@ -103,7 +103,7 @@ class TestEnvironmentRouting(TestCase):
 
     def test_unknown_environment_returns_400(self):
         url = reverse("collateral", kwargs={"environment": "fakenet"})
-        response = self.client.post(url, {"tx_body": "deadbeef"}, format="json")
+        response = self.client.post(url, {"tx": "deadbeef"}, format="json")
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json(), {"detail": "Invalid Environment"})
 
@@ -132,6 +132,20 @@ class TestLandingPages(TestCase):
         # Must be a JSON object, not a list, since it's keyed by PKH.
         self.assertIsInstance(response.json(), dict)
 
+    def test_known_hosts_sets_cache_control_no_store(self):
+        # The file is hot-reloadable; an upstream proxy serving a stale
+        # registry would defeat that.
+        response = self.client.get("/known_hosts/")
+        self.assertEqual(response["Cache-Control"], "no-store")
+
+    def test_landing_page_post_is_405(self):
+        response = self.client.post("/")
+        self.assertEqual(response.status_code, 405)
+
+    def test_known_hosts_post_is_405(self):
+        response = self.client.post("/known_hosts/")
+        self.assertEqual(response.status_code, 405)
+
 
 @override_settings(ALLOWED_HOSTS=["testserver"])
 class TestThrottle(TestCase):
@@ -149,13 +163,13 @@ class TestThrottle(TestCase):
     @patch("api.views.ProvideCollateralThrottle.rate", "2/min")
     def test_429_after_rate_limit_exceeded(self):
         # Two requests succeed (well, get processed — they'll 400 because the
-        # tx_body is junk, but that's after the throttle check). The third
+        # tx is junk, but that's after the throttle check). The third
         # request hits the throttle.
         for _ in range(2):
-            response = self.client.post(self.url, {"tx_body": "deadbeef"}, format="json")
+            response = self.client.post(self.url, {"tx": "deadbeef"}, format="json")
             self.assertNotEqual(response.status_code, 429)
 
-        response = self.client.post(self.url, {"tx_body": "deadbeef"}, format="json")
+        response = self.client.post(self.url, {"tx": "deadbeef"}, format="json")
         self.assertEqual(response.status_code, 429)
 
 

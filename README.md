@@ -11,9 +11,6 @@ The whole product is one endpoint:
 POST /<environment>/collateral/   { "tx": "<hex cbor>" }   →   { "witness": "<hex cbor>" }
 ```
 
-The historical request field name `tx_body` is still accepted as a
-deprecated alias and will be removed in a future major release.
-
 An optional `additional_utxos` field on the request is forwarded to Ogmios
 as [`additionalUtxo`](https://ogmios.dev/mini-protocols/local-tx-submission/#additional-utxo-set)
 so script evaluation can see UTxOs from a transaction not yet on chain.

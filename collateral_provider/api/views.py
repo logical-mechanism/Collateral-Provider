@@ -2,6 +2,7 @@ import ipaddress
 import json
 import logging
 import os
+import time
 from functools import lru_cache
 from typing import ClassVar
 
@@ -13,6 +14,7 @@ from django.http import (
     JsonResponse,
 )
 from django.shortcuts import redirect, render
+from django.views.decorators.http import require_GET
 from drf_spectacular.utils import (
     OpenApiExample,
     OpenApiParameter,
@@ -29,7 +31,7 @@ from rest_framework.views import APIView
 
 from .data_files import MtimeReloadingJson
 from .serializers import ProvideCollateralSerializer
-from .signature import witness_tx_cbor
+from .services.collateral import issue_witness
 
 logger = logging.getLogger("api")
 
@@ -149,6 +151,7 @@ class ProvideCollateralThrottle(throttling.AnonRateThrottle):
                 description="Witness CBOR (hex). Decoded shape: `[0, [pubkey, signature]]`.",
             ),
             400: OpenApiResponse(description="Validation error — invalid environment, invalid CBOR, or tx fails the collateral-usage rules."),
+            415: OpenApiResponse(description="Unsupported media type — body must be application/json."),
             429: OpenApiResponse(description="Rate limit exceeded."),
             503: OpenApiResponse(description="Validation upstream (Koios) is unavailable; try again later."),
         },
@@ -203,23 +206,37 @@ class ProvideCollateralView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        serializer = ProvideCollateralSerializer(
-            data=request.data,
-            context={
-                "environment": environment,
-                "env_settings": env_settings,
-                "ip_address": ip_address,
-                "networks": list(settings.ENVIRONMENTS.keys()),
-            },
-        )
+        serializer = ProvideCollateralSerializer(data=request.data)
         # raise_exception=True lets the custom DRF exception handler
         # normalize the response shape to {"detail": "..."} consistently
-        # with every other 4xx/5xx the API can produce. The validator
-        # already logged the specific reason at WARNING level.
+        # with every other 4xx/5xx the API can produce. Validators inside
+        # the service log their own warning-level reasons.
         serializer.is_valid(raise_exception=True)
-        tx_cbor = serializer.validated_data["tx"]
-        witness_cbor = witness_tx_cbor(tx_cbor, settings.SKEY_PATH, settings.VKEY_PATH)
-        logger.info("Witnessed tx: ip=%s env=%s", ip_address, environment)
+
+        started = time.monotonic()
+        witness_cbor, tx_hash = issue_witness(
+            tx_cbor=serializer.validated_data["tx"],
+            environment=environment,
+            env_settings=env_settings,
+            ip_address=ip_address,
+            networks=list(settings.ENVIRONMENTS.keys()),
+            additional_utxos=serializer.validated_data.get("additional_utxos"),
+        )
+        duration_ms = int((time.monotonic() - started) * 1000)
+        # Keep the structured fields on the record (JSON formatter
+        # surfaces them as top-level keys) while also embedding them in
+        # the message so the plain-text formatter prints something
+        # operators can grep without changing the format string.
+        logger.info(
+            "Witnessed tx: ip=%s env=%s tx_hash=%s duration_ms=%d",
+            ip_address, environment, tx_hash, duration_ms,
+            extra={
+                "ip": ip_address,
+                "env": environment,
+                "tx_hash": tx_hash,
+                "duration_ms": duration_ms,
+            },
+        )
         return Response({"witness": witness_cbor}, status=status.HTTP_200_OK)
 
 
@@ -258,24 +275,40 @@ class ProvideCollateralView(APIView):
 @api_view(["GET"])
 @throttle_classes([])
 def healthz_view(request):
+    # Two parallel lists: ``problems`` is what we return to the public
+    # caller (label-only, no filesystem leak); ``log_problems`` carries
+    # the absolute paths so the operator can grep their app log when
+    # the LB starts seeing 503s. Don't merge the two — anything in
+    # ``problems`` is world-readable.
     problems = []
+    log_problems = []
     for label, path in (("skey", settings.SKEY_PATH), ("vkey", settings.VKEY_PATH)):
         if not os.path.exists(path):
-            problems.append(f"{label} missing at {path}")
+            problems.append(f"{label} missing")
+            log_problems.append(f"{label} missing at {path}")
         elif not os.access(path, os.R_OK):
-            problems.append(f"{label} not readable at {path}")
+            problems.append(f"{label} unreadable")
+            log_problems.append(f"{label} unreadable at {path}")
     if not os.path.exists(_known_hosts_path()):
-        problems.append(f"known_hosts missing at {_known_hosts_path()}")
+        problems.append("known_hosts missing")
+        log_problems.append(f"known_hosts missing at {_known_hosts_path()}")
 
     if problems:
-        return Response(
+        for line in log_problems:
+            logger.warning("healthz: %s", line)
+        response = Response(
             {"status": "error", "problems": problems},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
-    return Response(
-        {"status": "ok", "version": settings.SPECTACULAR_SETTINGS["VERSION"]},
-        status=status.HTTP_200_OK,
-    )
+    else:
+        response = Response(
+            {"status": "ok", "version": settings.SPECTACULAR_SETTINGS["VERSION"]},
+            status=status.HTTP_200_OK,
+        )
+    # Don't let an upstream proxy cache "ok" past the moment the keys
+    # disappear (or vice versa).
+    response["Cache-Control"] = "no-store"
+    return response
 
 
 def metrics_view(request):
@@ -297,6 +330,7 @@ def metrics_view(request):
     return HttpResponse(generate_latest(), content_type=CONTENT_TYPE_LATEST)
 
 
+@require_GET
 def landing_page(request):
     """Render the public landing page. Shows the provider's PKH so a user
     can confirm they're talking to the right provider, plus the network
@@ -310,11 +344,16 @@ def landing_page(request):
     )
 
 
+@require_GET
 def known_hosts_view(request):
     """Return the full known-hosts registry as JSON. Returns ``{}`` if the
     file is missing — that's the same response shape as an empty registry,
-    so consumers don't have to handle two cases."""
-    return JsonResponse(_load_known_hosts())
+    so consumers don't have to handle two cases. ``Cache-Control: no-store``
+    so an upstream proxy can't serve a stale registry after an operator
+    edit (the file is hot-reloadable; caching defeats that)."""
+    response = JsonResponse(_load_known_hosts())
+    response["Cache-Control"] = "no-store"
+    return response
 
 
 def custom_page_not_found(request, exception):

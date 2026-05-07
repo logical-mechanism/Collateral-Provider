@@ -185,7 +185,30 @@ REST_FRAMEWORK = {
     # those classes lazily import auth.User.
     'DEFAULT_AUTHENTICATION_CLASSES': [],
     'UNAUTHENTICATED_USER': None,
+    # JSON only. Form/multipart parsers are documented surface area we
+    # don't use, and a multipart upload of `tx=<cbor>` would otherwise
+    # succeed silently. Locking to JSON also makes the 415 response
+    # consistent with the OpenAPI spec.
+    'DEFAULT_PARSER_CLASSES': [
+        'rest_framework.parsers.JSONParser',
+    ],
 }
+
+# Protocol-adjacent caps. ``MAX_TX_SIZE`` matches the on-chain Conway
+# protocol parameter (16 KiB binary); ``ADDITIONAL_UTXOS_MAX_BYTES``
+# caps the JSON-encoded `additional_utxos` field so a malformed payload
+# can't burn a Koios round-trip. Both are env-overridable so a future
+# hard-fork that bumps the protocol parameter doesn't require a code
+# redeploy. The HTTP body cap is derived from them — there's no point
+# accepting a body larger than the largest possible legitimate one.
+MAX_TX_SIZE = env.int('MAX_TX_SIZE', default=16 * 1024)
+ADDITIONAL_UTXOS_MAX_BYTES = env.int('ADDITIONAL_UTXOS_MAX_BYTES', default=32 * 1024)
+
+# Body = hex tx (2x binary) + additional_utxos JSON + 4 KiB of envelope
+# (field names, JSON quoting, throttling slack). Django rejects anything
+# larger before the view sees it, so junk can't burn worker CPU.
+DATA_UPLOAD_MAX_MEMORY_SIZE = (MAX_TX_SIZE * 2) + ADDITIONAL_UTXOS_MAX_BYTES + 4 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = DATA_UPLOAD_MAX_MEMORY_SIZE
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Cardano Collateral Provider API',

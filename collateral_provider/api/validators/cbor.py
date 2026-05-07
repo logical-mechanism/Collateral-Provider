@@ -1,10 +1,10 @@
 import cbor2
+from django.conf import settings
 
 from api.ban_list import banned_addresses
 from api.tx_fields import (
     COLLATERAL_INPUTS,
     INPUTS,
-    MAX_TX_SIZE,
     OUTPUTS,
     REQUIRED_SIGNERS,
     TX_BODY,
@@ -21,7 +21,7 @@ def check_cbor_hex(tx_body_cbor: str) -> bytes:
         tx_bytes = bytes.fromhex(tx_body_cbor)
     except ValueError:
         raise_validation_error("Invalid Hex Data In Tx")
-    if len(tx_bytes) > MAX_TX_SIZE:
+    if len(tx_bytes) > settings.MAX_TX_SIZE:
         raise_validation_error("Tx Is Too Large")
     return tx_bytes
 

@@ -24,11 +24,11 @@ class TestErrorEnvelope(TestCase):
         cache.clear()
 
     def test_validator_error_flattened_to_detail(self):
-        # Non-hex tx_body -> our validators.cbor.check_cbor_hex raises
+        # Non-hex tx -> our validators.cbor.check_cbor_hex raises
         # ValidationError("Invalid Hex Data In Tx"), which DRF would wrap as
-        # {"tx_body": ["Invalid Hex Data In Tx"]}. The custom handler should
+        # {"tx": ["Invalid Hex Data In Tx"]}. The custom handler should
         # flatten that to {"detail": "Invalid Hex Data In Tx"}.
-        response = self.client.post(self.url, {"tx_body": "not-hex"}, format="json")
+        response = self.client.post(self.url, {"tx": "not-hex"}, format="json")
         self.assertEqual(response.status_code, 400)
         body = response.json()
         self.assertEqual(set(body.keys()), {"detail"})
@@ -36,7 +36,7 @@ class TestErrorEnvelope(TestCase):
 
     def test_invalid_environment_already_uses_detail(self):
         url = reverse("collateral", kwargs={"environment": "fakenet"})
-        response = self.client.post(url, {"tx_body": "deadbeef"}, format="json")
+        response = self.client.post(url, {"tx": "deadbeef"}, format="json")
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json(), {"detail": "Invalid Environment"})
 
@@ -54,7 +54,7 @@ class TestErrorEnvelope(TestCase):
         mock_eval.side_effect = UpstreamUnavailable("upstream down")
 
         response = self.client.post(
-            self.url, {"tx_body": build_happy_path_tx_cbor()}, format="json"
+            self.url, {"tx": build_happy_path_tx_cbor()}, format="json"
         )
         self.assertEqual(response.status_code, 503)
         body = response.json()
@@ -63,7 +63,7 @@ class TestErrorEnvelope(TestCase):
 
     def test_no_field_names_leak_in_400_response(self):
         # The most important reason for normalization: the response shouldn't
-        # leak our internal serializer field names ("tx_body") to clients.
-        response = self.client.post(self.url, {"tx_body": "not-hex"}, format="json")
+        # leak our internal serializer field names ("tx") to clients.
+        response = self.client.post(self.url, {"tx": "not-hex"}, format="json")
         self.assertEqual(response.status_code, 400)
-        self.assertNotIn("tx_body", response.json())
+        self.assertNotIn("tx", response.json())

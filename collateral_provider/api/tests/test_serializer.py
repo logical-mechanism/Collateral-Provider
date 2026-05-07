@@ -1,147 +1,86 @@
-# api/tests/test_serializers.py
+"""Shape-only tests for ProvideCollateralSerializer.
 
-from django.conf import settings
+Pipeline-level tests (CBOR validity, collateral-usage rules, signer
+checks, upstream evaluation) live in test_services.py because they
+exercise api.services.collateral.issue_witness, not the serializer.
+"""
+
 from django.test import TestCase
 
 from api.serializers import ProvideCollateralSerializer
 
-from .test_big_data import invalid_tx_body_too_big
-from .test_data import (
-    invalid_tx_body_cbor_is_invalid_is_set,
-    invalid_tx_body_cbor_is_lying,
-    invalid_tx_body_cbor_missing_inputs,
-    invalid_tx_body_cbor_spending_collateral,
-    invalid_tx_body_missing_collateral,
-    valid_tx_body_cbor_but_no_collateral,
-)
 
-
-class ProvideCollateralSerializerTestCase(TestCase):
-    def setUp(self):
-        # Set up the environment context once for all tests
-        self.environment = 'preprod'
-        self.env_settings = settings.ENVIRONMENTS.get(self.environment)
-        self.ip_address = '',
-        self.networks = ['preprod']
-
-    def test_invalid_empty_tx_body(self):
-        data = {
-            'tx_body': "",
-        }
-        serializer = ProvideCollateralSerializer(
-            data=data,
-            context={
-                'environment': self.environment,
-                'env_settings': self.env_settings,
-                'ip_address': self.ip_address,
-                'networks': self.networks,
-            }
-        )
+class ProvideCollateralSerializerShapeTestCase(TestCase):
+    def test_empty_tx_rejected(self):
+        serializer = ProvideCollateralSerializer(data={'tx': ''})
         self.assertFalse(serializer.is_valid())
+        self.assertIn('tx', serializer.errors)
 
-    def test_invalid_tx_body_cbor_missing_inputs(self):
-        data = {
-            'tx_body': invalid_tx_body_cbor_missing_inputs(),
-        }
-        serializer = ProvideCollateralSerializer(
-            data=data,
-            context={
-                'environment': self.environment,
-                'env_settings': self.env_settings,
-                'ip_address': self.ip_address,
-                'networks': self.networks,
-            }
-        )
+    def test_missing_tx_rejected(self):
+        serializer = ProvideCollateralSerializer(data={})
         self.assertFalse(serializer.is_valid())
+        self.assertIn('tx', serializer.errors)
 
-    def test_valid_tx_body_cbor_but_no_collateral(self):
-        data = {
-            'tx_body': valid_tx_body_cbor_but_no_collateral(),
-        }
-        serializer = ProvideCollateralSerializer(
-            data=data,
-            context={
-                'environment': self.environment,
-                'env_settings': self.env_settings,
-                'ip_address': self.ip_address,
-                'networks': self.networks,
-            }
-        )
-        self.assertFalse(serializer.is_valid())
+    def test_wellformed_request_passes_shape_check(self):
+        # Even a hex string that won't decode passes the *shape* check —
+        # the serializer's job is structural, not semantic.
+        serializer = ProvideCollateralSerializer(data={'tx': 'deadbeef'})
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data['tx'], 'deadbeef')
 
-    def test_invalid_tx_body_missing_collateral(self):
-        data = {
-            'tx_body': invalid_tx_body_missing_collateral(),
-        }
-        serializer = ProvideCollateralSerializer(
-            data=data,
-            context={
-                'environment': self.environment,
-                'env_settings': self.env_settings,
-                'ip_address': self.ip_address,
-                'networks': self.networks,
-            }
-        )
-        self.assertFalse(serializer.is_valid())
+    def test_additional_utxos_optional(self):
+        serializer = ProvideCollateralSerializer(data={'tx': 'deadbeef'})
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertNotIn('additional_utxos', serializer.validated_data)
 
-    def test_invalid_tx_body_cbor_spending_collateral(self):
-        data = {
-            'tx_body': invalid_tx_body_cbor_spending_collateral(),
-        }
+    def test_additional_utxos_empty_list_normalized_to_none(self):
         serializer = ProvideCollateralSerializer(
-            data=data,
-            context={
-                'environment': self.environment,
-                'env_settings': self.env_settings,
-                'ip_address': self.ip_address,
-                'networks': self.networks,
-            }
+            data={'tx': 'deadbeef', 'additional_utxos': []}
         )
-        self.assertFalse(serializer.is_valid())
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertIsNone(serializer.validated_data['additional_utxos'])
 
-    def test_invalid_tx_body_cbor_is_invalid_is_set(self):
-        data = {
-            'tx_body': invalid_tx_body_cbor_is_invalid_is_set(),
-        }
-        serializer = ProvideCollateralSerializer(
-            data=data,
-            context={
-                'environment': self.environment,
-                'env_settings': self.env_settings,
-                'ip_address': self.ip_address,
-                'networks': self.networks,
-            }
-        )
+    def test_additional_utxos_pair_shape_required(self):
+        serializer = ProvideCollateralSerializer(data={
+            'tx': 'deadbeef',
+            'additional_utxos': [[{'transaction': {'id': 'a' * 64}, 'index': 0}]],
+        })
         self.assertFalse(serializer.is_valid())
+        self.assertIn('additional_utxos', serializer.errors)
 
-    def test_invalid_tx_body_cbor_is_lying(self):
-        data = {
-            'tx_body': invalid_tx_body_cbor_is_lying(),
-        }
-        serializer = ProvideCollateralSerializer(
-            data=data,
-            context={
-                'environment': self.environment,
-                'env_settings': self.env_settings,
-                'ip_address': self.ip_address,
-                'networks': self.networks,
-            }
-        )
-        # serializer doesn't know
+    def test_additional_utxos_inner_must_be_objects(self):
+        serializer = ProvideCollateralSerializer(data={
+            'tx': 'deadbeef',
+            'additional_utxos': [['txin-as-string', {'address': 'addr...'}]],
+        })
         self.assertFalse(serializer.is_valid())
+        self.assertIn('additional_utxos', serializer.errors)
 
-    def test_invalid_tx_body_too_big(self):
-        data = {
-            'tx_body': invalid_tx_body_too_big(),
-        }
-        serializer = ProvideCollateralSerializer(
-            data=data,
-            context={
-                'environment': self.environment,
-                'env_settings': self.env_settings,
-                'ip_address': self.ip_address,
-                'networks': self.networks,
-            }
-        )
-        # serializer doesn't know
+    def test_additional_utxos_size_capped(self):
+        bloat = 'x' * 40_000
+        serializer = ProvideCollateralSerializer(data={
+            'tx': 'deadbeef',
+            'additional_utxos': [
+                [
+                    {'transaction': {'id': 'a' * 64}, 'index': 0},
+                    {'address': 'addr_test1qz...', 'memo': bloat},
+                ]
+            ],
+        })
         self.assertFalse(serializer.is_valid())
+        self.assertIn('additional_utxos', serializer.errors)
+
+    def test_additional_utxos_count_capped(self):
+        # Many tiny pairs would pass the byte cap but still make Koios
+        # chew through hundreds of UTxOs per request. The count cap
+        # (currently 400) catches this orthogonal case.
+        from api.serializers import ADDITIONAL_UTXOS_MAX_COUNT
+        too_many = [
+            [{'transaction': {'id': 'a' * 64}, 'index': 0}, {'address': 'a'}]
+        ] * (ADDITIONAL_UTXOS_MAX_COUNT + 1)
+        serializer = ProvideCollateralSerializer(data={
+            'tx': 'deadbeef',
+            'additional_utxos': too_many,
+        })
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('additional_utxos', serializer.errors)

@@ -71,7 +71,7 @@ class TestMetricsMiddleware(TestCase):
 
         before = self._counter_value("preprod", "400")
         url = reverse("collateral", kwargs={"environment": "preprod"})
-        self.client.post(url, {"tx_body": "not-hex"}, format="json")
+        self.client.post(url, {"tx": "not-hex"}, format="json")
         after = self._counter_value("preprod", "400")
         self.assertEqual(after - before, 1)
         # Histogram should also have observed at least one sample for preprod.

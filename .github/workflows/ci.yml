@@ -82,6 +82,11 @@ jobs:
       - name: Audit runtime dependencies
         run: pip-audit -r requirements.txt
 
+      - name: Audit dev dependencies
+        # CVEs in test/build tooling don't reach production but they
+        # still affect contributors and CI runners. Catch them too.
+        run: pip-audit -r requirements-dev.txt
+
   docker:
     runs-on: ubuntu-latest
     needs: ci
