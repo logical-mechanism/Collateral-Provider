@@ -8,8 +8,11 @@ back a vkey witness they attach to the witness set before submitting on chain.
 The whole product is one endpoint:
 
 ```
-POST /<environment>/collateral/   { "tx_body": "<hex cbor>" }   →   { "witness": "<hex cbor>" }
+POST /<environment>/collateral/   { "tx": "<hex cbor>" }   →   { "witness": "<hex cbor>" }
 ```
+
+The historical request field name `tx_body` is still accepted as a
+deprecated alias and will be removed in a future major release.
 
 Validation pipeline (cheap to expensive — first failure short-circuits the rest):
 
@@ -41,7 +44,7 @@ up themselves.
 ```bash
 curl -X POST https://www.giveme.my/preprod/collateral/ \
      -H 'Content-Type: application/json' \
-     -d '{ "tx_body": "84a900d901028182582000...f5f6" }'
+     -d '{ "tx": "84a900d901028182582000...f5f6" }'
 ```
 
 Replace `preprod` with whichever network the host you're calling supports.

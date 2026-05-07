@@ -16,6 +16,81 @@ HTTP contract:
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-05-06
+
+A second polish pass focused on observability, 12-factor configuration,
+and operator self-service. Fully backward-compatible with 1.1: every
+existing client request and response shape is still honored.
+
+### Added
+
+- **Single `__version__` constant** in `collateral_provider/api/__init__.py`.
+  Both the OpenAPI schema (`SPECTACULAR_SETTINGS['VERSION']`) and the
+  `/healthz` response read from it. One bump location, no drift.
+- **JSON logging** (`LOG_FORMAT=json`). Stdlib-only formatter at
+  `api.log_format.JsonFormatter` emits one JSON object per record with
+  `level`, `time`, `logger`, `module`, `message`, `request_id`, plus
+  any `extra={...}` kwargs as top-level keys. Default stays `text` so
+  existing log scraping is unaffected.
+- **Prometheus `/metrics`** endpoint. Off by default
+  (`METRICS_ENABLED=False` → 404); when on, restricted to
+  `METRICS_ALLOW_IPS` (default `127.0.0.1`, `::1`). Metrics are
+  aggregated and low-cardinality (no per-IP / per-PKH / per-tx labels)
+  in line with the privacy goal:
+    - `collateral_http_requests_total{environment, status}`
+    - `collateral_http_request_duration_seconds{environment}`
+    - `collateral_koios_requests_total{environment, outcome}` —
+      outcomes: `success`, `tx_invalid`, `timeout`, `request_error`,
+      `http_error`, `invalid_json`
+    - `collateral_koios_request_duration_seconds{environment}`
+- **Hot-reloadable JSON data files** for ban list and known-hosts
+  registry. `bans.json` (path: `BANS_PATH`) and `known.hosts.json`
+  (path: `KNOWN_HOSTS_PATH`) are re-read on the next request after
+  the file's mtime advances — operators can update them without
+  bouncing the service. Atomic write-tmp-then-rename is the expected
+  edit workflow. `bans.json.example` checked in with the canonical
+  shape; the real file is gitignored.
+- **`tx` request field** as the canonical name on the collateral
+  endpoint. The legacy field name `tx_body` was misleading (the value
+  is the whole transaction CBOR, not just the body) and is now a
+  deprecated alias that still works for one transition release.
+  Sending both `tx` and `tx_body` is rejected.
+- **`TRUSTED_PROXY_IPS` allowlist** for X-Forwarded-For. The service
+  only honors XFF when the immediate peer is in the list (default
+  `127.0.0.1`, `::1`). A misconfigured deploy where gunicorn is
+  reachable directly can no longer be tricked into accepting a
+  spoofed source IP via XFF. Empty list disables XFF entirely.
+
+### Changed
+
+- `_load_known_hosts` no longer uses `lru_cache(maxsize=1)`. The cache
+  was effectively forever; reloading required a process restart. Now
+  uses the same mtime-aware loader as the ban list.
+- The DRF default throttle classes setting was removed (had been a
+  global default that any new endpoint would inherit). Endpoints now
+  state their throttle explicitly. `/metrics` and `/healthz` opt out
+  via `@throttle_classes([])`.
+- `landing_page` and `known_hosts_view` no longer have FileNotFoundError
+  branches; the loader returns `{}` for a missing file, which is the
+  same shape as an empty registry.
+
+### Security
+
+- `_client_ip` now refuses to honor X-Forwarded-For from untrusted
+  peers. Documented in `SECURITY.md` under the operator hardening
+  checklist.
+- `/metrics` is not exposed unless explicitly enabled, and even then
+  only to allow-listed IPs — implementation-detail observability
+  data should not be world-readable.
+
+### Removed
+
+- Stale `captcha/` directory (only contained `__pycache__` from a
+  long-removed feature). Added `__pycache__/` and `*.pyc` to the
+  root `.gitignore` so the same accident can't recur.
+- `lru_cache` import from `views.py` (no longer needed after the
+  known-hosts refactor).
+
 ## [1.1.0] — 2026-05-06
 
 This release is the result of a substantial cleanup pass on top of the

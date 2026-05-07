@@ -13,9 +13,7 @@ collat_witness() {
   # Perform the curl request through the Tor network
   local response=$(curl -s --socks5-hostname 127.0.0.1:9050 -X POST "http://${tor_url}/${network}/collateral/" \
     -H 'Content-Type: application/json' \
-    -d '{
-          "tx_body": "'"${tx_cbor}"'"
-        }')
+    -d '{"tx": "'"${tx_cbor}"'"}')
 
   # Check if the response contains a 'witness' field
   local collat_witness=$(echo "$response" | jq -r '.witness')
