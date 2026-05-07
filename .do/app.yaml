@@ -115,13 +115,10 @@ services:
         value: --mainnet
 
       # --- Optional but strongly recommended in production ---
-      - key: LOG_FORMAT
-        # JSON-per-line so DO's log panel indexes fields cleanly.
-        value: json
-      - key: LOG_FILE
-        # Kill the rotating file handler — gunicorn's stdout/stderr is
-        # what App Platform captures; a second sink just costs disk.
-        value: /dev/null
+      # LOG_FORMAT=json and LOG_FILE=/dev/null are baked into the
+      # Dockerfile as defaults — App Platform captures gunicorn stdout
+      # and indexes the JSON fields. Override here only if you want
+      # plain-text logs or a different sink.
       - key: LOG_LEVEL
         value: INFO
       - key: COLLATERAL_THROTTLE_RATE

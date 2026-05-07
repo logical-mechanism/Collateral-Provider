@@ -114,6 +114,8 @@ jobs:
             -e MAINNET_TXID=$ZEROS \
             -e MAINNET_TXIDX=0 \
             -e MAINNET_NETWORK=--mainnet \
+            -e LOG_FORMAT=json \
+            -e LOG_FILE=/dev/null \
             collateral-provider:ci
 
           # Give gunicorn a moment to bind. /healthz is the readiness signal.

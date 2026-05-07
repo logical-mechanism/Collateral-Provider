@@ -14,7 +14,16 @@ FROM python:3.12-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    # In a container the default file-based debug.log is wrong:
+    # gunicorn's stdout is what the platform captures, /app/collateral_provider/
+    # isn't writable by the unprivileged app user, and any file we did write
+    # would die with the container on restart. Send the rotating handler at
+    # /dev/null and emit JSON-per-line on stdout so log aggregators index
+    # fields cleanly. Operators can override either by setting the env var
+    # in their platform spec.
+    LOG_FILE=/dev/null \
+    LOG_FORMAT=json
 
 # libsodium isn't strictly required (PyNaCl bundles its own), but build-essential
 # would only be needed if a wheel were missing — every dep in requirements.txt
