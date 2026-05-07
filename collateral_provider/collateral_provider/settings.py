@@ -111,6 +111,11 @@ MIDDLEWARE = [
     'api.middleware.RequestIDMiddleware',     # stamp X-Request-ID before anything logs
     'api.middleware.MetricsMiddleware',       # measure /collateral request count + duration
     'django.middleware.security.SecurityMiddleware',
+    # Whitenoise serves the collected static files directly from gunicorn.
+    # Required because containerized deploys (DO App Platform, etc.) don't
+    # have a separate static-file server in front. Must sit immediately
+    # after SecurityMiddleware per Whitenoise docs.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -279,3 +284,19 @@ STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'static'),  # This is your static folder
 ]
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+# Whitenoise: gzip/brotli-compress the collected static assets so the
+# wire bytes are small. We do NOT use the manifest variant (which would
+# hash filenames) because it requires `collectstatic` to have run before
+# anything renders a `{% static %}` tag — that breaks the test suite,
+# which doesn't run collectstatic. The static surface here is tiny
+# (favicons + DRF browsable-API CSS) so the cache-busting story is fine
+# without filename hashing.
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage',
+    },
+}
