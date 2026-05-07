@@ -56,14 +56,24 @@ RUN set -eux; \
 
 # Cache directory for the file-based throttle. Has to be writable at runtime.
 # /app is owned by root after COPY; chown the slots that need writes.
-RUN mkdir -p /app/collateral_provider/.cache /app/collateral_provider/staticfiles \
-    && chown -R app:app /app/collateral_provider/.cache /app/collateral_provider/staticfiles
+# Pre-create /run/keys for the entrypoint's signing-key materialization
+# (the app user can't mkdir under /run, which is root-owned).
+RUN mkdir -p /app/collateral_provider/.cache /app/collateral_provider/staticfiles /run/keys \
+    && chown -R app:app /app/collateral_provider/.cache /app/collateral_provider/staticfiles /run/keys \
+    && chmod 700 /run/keys
 
 USER app
 
 WORKDIR /app/collateral_provider
 
 EXPOSE 8080
+
+# Entrypoint materializes SKEY_CONTENTS / VKEY_CONTENTS env vars to
+# tmpfs files (/run/keys/) before exec'ing gunicorn. Operators using a
+# mounted volume for keys can simply leave those env vars unset — the
+# entrypoint skips the materialization and gunicorn picks up whatever
+# SKEY_PATH / VKEY_PATH point to.
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # Workers: 2-3 is appropriate for a single small instance. The file-based
 # cache backend shares throttle counters across workers on the same host.
