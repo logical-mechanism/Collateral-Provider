@@ -1,16 +1,18 @@
-# api/tests.py
 from django.core.cache import cache
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
 
-from .test_data import (invalid_tx_body_cbor_is_lying,
-                        invalid_tx_body_cbor_missing_inputs,
-                        invalid_tx_body_cbor_spending_collateral,
-                        invalid_tx_body_missing_collateral,
-                        valid_tx_body_cbor_but_no_collateral)
+from .test_data import (
+    invalid_tx_body_cbor_is_lying,
+    invalid_tx_body_cbor_missing_inputs,
+    invalid_tx_body_cbor_spending_collateral,
+    invalid_tx_body_missing_collateral,
+    valid_tx_body_cbor_but_no_collateral,
+)
 
 
+@override_settings(ALLOWED_HOSTS=["testserver"])
 class ProvideCollateralTestCase(TestCase):
     def setUp(self):
         self.client = APIClient()

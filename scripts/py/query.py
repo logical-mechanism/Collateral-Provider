@@ -14,9 +14,7 @@ def collat_witness(tx_cbor: str, network: str) -> str:
     """
     url = f"https://www.giveme.my/{network}/collateral/"
     headers = {'Content-Type': 'application/json'}
-    data = {
-        "tx_body": tx_cbor
-    }
+    data = {"tx": tx_cbor}
 
     # Perform the POST request
     response = requests.post(url, headers=headers, json=data)

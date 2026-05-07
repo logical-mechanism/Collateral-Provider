@@ -3,45 +3,79 @@ import logging
 from django.conf import settings
 from rest_framework import serializers
 
-from .validators.cbor import CborValidator
-from .validators.environment import EnvironmentValidator
-from .validators.transaction import TransactionValidator
+from api.validators.cbor import (
+    check_cbor_hex,
+    check_collateral,
+    check_inputs,
+    check_outputs,
+    check_signers,
+    check_tx_body,
+)
+from api.validators.environment import check_environment, check_ip_address
+from api.validators.transaction import check_valid_tx
 
-# Initialize the logger
-logger = logging.getLogger('api')
+logger = logging.getLogger("api")
 
 
 class ProvideCollateralSerializer(serializers.Serializer):
+    """The request body has one field, ``tx``, holding the full transaction
+    CBOR (body + witness set + is_valid + auxiliary data) hex-encoded.
 
-    tx_body = serializers.CharField(
-        allow_blank=False,    # Prevent empty strings
-        trim_whitespace=True  # Automatically strip leading/trailing whitespaces
-    )
+    For one transition release we also accept the historical name
+    ``tx_body`` as an alias — that name was misleading because the value
+    is the *whole transaction*, not just the body, but renaming would
+    have broken every client overnight. The alias path logs at INFO so
+    operators can see who's still on the old shape, and emits the
+    response under the new name regardless.
+    """
 
-    def validate_tx_body(self, tx_body_cbor):
-        # the environment must be ok
-        environment = self.context.get('environment')
-        env_settings = self.context.get('env_settings')
-        ip_address = self.context.get('ip_address')
-        networks = self.context.get('networks')
+    tx = serializers.CharField(allow_blank=False, trim_whitespace=True)
 
-        logger.debug(f"Validating Tx Body From {ip_address}")
+    LEGACY_FIELD = "tx_body"
 
-        env_validator = EnvironmentValidator(logger)
-        env_validator.check_ip_address(ip_address)
-        env_validator.check_environment(environment, networks)
+    def to_internal_value(self, data):
+        # Accept tx_body as a deprecated alias for tx. Reject the
+        # ambiguous case where the client sends both — they presumably
+        # meant something specific by sending the legacy name and we'd
+        # rather refuse than silently pick one.
+        if isinstance(data, dict):
+            has_tx = "tx" in data
+            has_legacy = self.LEGACY_FIELD in data
+            if has_tx and has_legacy:
+                raise serializers.ValidationError({
+                    "tx": (
+                        "Send either 'tx' or the deprecated 'tx_body', not both."
+                    ),
+                })
+            if has_legacy and not has_tx:
+                logger.info(
+                    "Client used deprecated '%s' field; treating as alias for 'tx'.",
+                    self.LEGACY_FIELD,
+                )
+                data = {**data, "tx": data[self.LEGACY_FIELD]}
+        return super().to_internal_value(data)
 
-        cbor_validator = CborValidator(logger)
-        tx_bytes = cbor_validator.check_cbor_hex(tx_body_cbor)
-        body = cbor_validator.check_tx_body(tx_bytes)
-        cbor_validator.check_inputs(body, env_settings)
-        cbor_validator.check_outputs(body)
-        cbor_validator.check_collateral(body, env_settings)
-        cbor_validator.check_signers(body, settings.PKH)
+    def validate_tx(self, tx_cbor: str) -> str:
+        """Run validation in cheap-to-expensive order. The first failure
+        raises ValidationError and short-circuits the rest."""
+        environment = self.context["environment"]
+        env_settings = self.context["env_settings"]
+        ip_address = self.context["ip_address"]
+        networks = self.context["networks"]
 
-        tx_validator = TransactionValidator(logger)
-        tx_validator.check_valid_tx(tx_body_cbor, environment)
+        logger.debug("Validating tx from %s", ip_address)
 
-        # At this point collateral is not being spent, it's in the collateral inputs,
-        # the pkh is being used to sign the tx, and the tx is valid.
-        return tx_body_cbor
+        check_ip_address(ip_address)
+        check_environment(environment, networks)
+
+        tx_bytes = check_cbor_hex(tx_cbor)
+        body = check_tx_body(tx_bytes)
+        check_inputs(body, env_settings)
+        check_outputs(body)
+        check_collateral(body, env_settings)
+        check_signers(body, settings.PKH)
+
+        # Most expensive check last: it's a remote HTTP call.
+        check_valid_tx(tx_cbor, environment)
+
+        return tx_cbor

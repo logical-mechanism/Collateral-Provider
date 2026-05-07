@@ -9,9 +9,7 @@ collat_witness() {
   # Perform the curl request and capture the response
   local response=$(curl -s -X POST "https://www.giveme.my/${network}/collateral/" \
     -H 'Content-Type: application/json' \
-    -d '{
-          "tx_body": "'"${tx_cbor}"'"
-        }')
+    -d '{"tx": "'"${tx_cbor}"'"}')
 
   # Check if the response contains a 'witness' field
   local collat_witness=$(echo "$response" | jq -r '.witness')

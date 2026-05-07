@@ -29,9 +29,7 @@ def collat_witness(tx_cbor: str, network: str) -> str:
     }
 
     headers = {'Content-Type': 'application/json'}
-    data = {
-        "tx_body": tx_cbor
-    }
+    data = {"tx": tx_cbor}
 
     try:
         # Perform the POST request through Tor

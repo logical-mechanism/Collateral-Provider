@@ -1,66 +1,88 @@
-import json
-import hashlib
 import binascii
+import hashlib
+import json
+import os
+from threading import RLock
+
 import cbor2
-from nacl.signing import SigningKey, VerifyKey
-from nacl.exceptions import BadSignatureError
 from nacl.encoding import RawEncoder
-from pycardano.serialization import (
-    OrderedSet,
+from nacl.exceptions import BadSignatureError
+from nacl.signing import SigningKey, VerifyKey
+
+from api.tx_fields import (
+    CERTIFICATES,
+    COLLATERAL_INPUTS,
+    INPUTS,
+    PROPOSAL_PROCEDURES,
+    REFERENCE_INPUTS,
+    REQUIRED_SIGNERS,
+    SET_TAG,
+    TX_BODY,
 )
 
+# Body fields that are CBOR-tag-258 sets in Conway. Their contents must be
+# sorted and re-tagged before hashing — anything else produces a tx-id the
+# node will reject.
+_SET_BODY_FIELDS = (
+    INPUTS,
+    CERTIFICATES,
+    COLLATERAL_INPUTS,
+    REQUIRED_SIGNERS,
+    REFERENCE_INPUTS,
+    PROPOSAL_PROCEDURES,
+)
+
+
+def _ordered_set(items) -> cbor2.CBORTag:
+    return cbor2.CBORTag(SET_TAG, sorted(items))
+
+
+_key_cache: dict[str, tuple[float, str]] = {}
+_key_cache_lock = RLock()
+
+
 def get_key_from_file(file_path: str) -> str:
+    """Read a Cardano-CLI-style ``{"cborHex": "..."}`` key file and return
+    the raw key bytes as hex. The leading 4 hex chars are the CBOR
+    byte-string tag and are stripped.
+
+    Cached by ``(path, mtime)``: a key rotation (atomic write of a new
+    skey/vkey) is picked up on the next signing request without restarting
+    the process. The hot-path cost is one ``os.path.getmtime`` syscall.
+    Concurrent re-reads are serialized under a lock so two threads racing
+    to load a freshly-rotated key don't both end up parsing the file.
     """
-    Reads a key from a JSON file and returns the hexadecimal key value.
+    mtime = os.path.getmtime(file_path)
+    cached = _key_cache.get(file_path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    with _key_cache_lock:
+        cached = _key_cache.get(file_path)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+        with open(file_path) as file:
+            data = json.load(file)
+        hex_value = data["cborHex"][4:]
+        _key_cache[file_path] = (mtime, hex_value)
+        return hex_value
 
-    Args:
-        file_path (str): The path to the JSON file containing the key.
 
-    Returns:
-        str: The 'cborHex' value (hexadecimal string) found in the JSON file,
-             with the first 4 characters removed.
-    """
-    # Open the JSON file and load its contents
-    with open(file_path, "r") as file:
-        data = json.load(file)
-
-    # Return the 'cborHex' value, starting from the 5th character
-    # the first 4 is the cbor encoding
-    return data.get("cborHex")[4:]
+def _clear_key_cache() -> None:
+    """Test helper: drop the in-memory cache so a fresh tmp file gets read."""
+    with _key_cache_lock:
+        _key_cache.clear()
 
 
 def sign(skey: str, msg: str) -> str:
-    """
-    Signs a message using a private key and returns the signature.
-
-    Args:
-        skey (str): The private key (signing key) in hexadecimal format.
-        msg (str): The message to be signed in hexadecimal format.
-
-    Returns:
-        str: The generated signature in hexadecimal format.
-    """
-    # Convert the private key and message from hex to bytes
+    """Ed25519-sign a hex message with a hex secret key, return hex signature."""
     sk_bytes = bytes.fromhex(skey)
     msg_bytes = bytes.fromhex(msg)
     signing_key = SigningKey(sk_bytes)
-    sig = signing_key.sign(msg_bytes, encoder=RawEncoder).signature.hex()
-    return sig
+    return signing_key.sign(msg_bytes, encoder=RawEncoder).signature.hex()
 
 
 def verify(vkey: str, signature: str, msg: str) -> bool:
-    """
-    Verifies a signature using a public key and the message.
-
-    Args:
-        vkey (str): The public key (verifying key) in hexadecimal format.
-        signature (str): The signature to verify in hexadecimal format.
-        msg (str): The message that was signed in hexadecimal format.
-
-    Returns:
-        bool: True if the signature is valid, False otherwise.
-    """
-    # Convert the public key, signature, and message from hex to bytes
+    """Ed25519-verify a hex signature against a hex message and hex public key."""
     vk_bytes = bytes.fromhex(vkey)
     sig_bytes = bytes.fromhex(signature)
     msg_bytes = bytes.fromhex(msg)
@@ -74,83 +96,30 @@ def verify(vkey: str, signature: str, msg: str) -> bool:
 
 
 def tx_id(tx_cbor: str) -> str:
-    """
-    Performs the Blake2b-256 hash on a tx body.
-
-    Args:
-        tx_cbor (str): The transaction CBOR from the API.
-
-    Returns:
-        tx_hash (str): The transaction hash in hexadecimal format.
-    """
+    """Compute the Blake2b-256 hash of the canonicalized transaction body."""
     tx_bytes = bytes.fromhex(tx_cbor)
     tx = cbor2.loads(tx_bytes)
-    tx_body = tx[0]
+    body = tx[TX_BODY]
 
-    # we need to reorder the things that are sets
+    for idx in _SET_BODY_FIELDS:
+        if idx in body:
+            body[idx] = _ordered_set(body[idx])
 
-    # inputs
-    tx_body[0] = OrderedSet(sorted(tx_body[0]), use_tag=True).to_primitive()
-    # this may not exist
-    try:
-        # certificates
-        tx_body[4] = OrderedSet(sorted(tx_body[4]), use_tag=True).to_primitive()
-    except KeyError:
-        pass
-    # collateral inputs
-    tx_body[13] = OrderedSet(sorted(tx_body[13]), use_tag=True).to_primitive()
-    # required signers
-    tx_body[14] = OrderedSet(sorted(tx_body[14]), use_tag=True).to_primitive()
-    # this may not exist
-    try:
-        # reference inputs
-        tx_body[18] = OrderedSet(sorted(tx_body[18]), use_tag=True).to_primitive()
-    except KeyError:
-        pass
-    # this may not exist
-    try:
-        # proposal_procedures
-        tx_body[20] = OrderedSet(sorted(tx_body[20]), use_tag=True).to_primitive()
-    except KeyError:
-        pass
-
-    # all the sets are taken place so now we can dump it and hash it
-    tx_body_cbor = cbor2.dumps(tx_body).hex()
-    return hashlib.blake2b(binascii.unhexlify(tx_body_cbor), digest_size=32).hexdigest()
+    body_cbor = cbor2.dumps(body)
+    return hashlib.blake2b(body_cbor, digest_size=32).hexdigest()
 
 
 def create_witness_cbor(public_key: str, signature: str) -> str:
-    """
-    Creates a valid witness to a transaction in CBOR.
-
-    Args:
-        public_key (str): The public key in hexadecimal format.
-        signature (str): The signature to verify in hexadecimal format.
-
-    Returns:
-        witness_cbor (str): The CBOR of a valid witness
-    """
+    """Build a Cardano vkey-witness CBOR: cbor([0, [pubkey, signature]])."""
     return cbor2.dumps(
         [0, [binascii.unhexlify(public_key), binascii.unhexlify(signature)]]
     ).hex()
 
+
 def witness_tx_cbor(tx_cbor: str, skey_path: str, vkey_path: str) -> str:
-    """
-    Create the witness CBOR given the tx CBOR, the skey, and the vkey paths.
-
-    Args:
-        tx_cbor (str): The transaction CBOR from the API.
-        skey_path (str): The secret key path.
-        vkey_path (str): The verification key path.
-
-    Returns:
-        witness_cbor (str): The CBOR of a valid witness
-    """
-    # get the keys
+    """Hash the body, sign it with the on-disk skey, return the witness CBOR."""
     sk = get_key_from_file(skey_path)
     pk = get_key_from_file(vkey_path)
-    # get the hash
     tx_hash = tx_id(tx_cbor)
-    # sign and create the witness
     sig = sign(sk, tx_hash)
     return create_witness_cbor(pk, sig)
