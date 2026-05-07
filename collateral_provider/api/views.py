@@ -1,5 +1,4 @@
 import ipaddress
-import json
 import logging
 import os
 import time
@@ -353,6 +352,11 @@ def landing_page(request):
                 "utxo_id": utxo.get("id", ""),
                 "utxo_idx": utxo.get("idx", 0),
             })
+    # Pre-fill the curl example with a real configured network when one is
+    # available so a visitor can copy-paste without first having to read
+    # the network list above. Falls back to a literal placeholder when the
+    # PKH isn't registered yet.
+    example_network = networks[0]["name"] if networks else "<network>"
     return render(
         request,
         "api/landing.html",
@@ -361,7 +365,7 @@ def landing_page(request):
             "networks": networks,
             "registered": isinstance(entry, dict),
             "version": settings.SPECTACULAR_SETTINGS["VERSION"],
-            "raw_networks_json": json.dumps(entry or {}, indent=2),
+            "example_network": example_network,
         },
     )
 

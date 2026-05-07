@@ -29,6 +29,13 @@
             --accent-hover: #870059;
             --code-bg: #f3f2ec;
             --shadow: 0 1px 2px rgba(20, 20, 20, 0.04);
+            --live: #1e7a3f;
+            --live-bg: #e6f4ec;
+            --live-border: #c5e3d1;
+            --test: #8a6a14;
+            --test-bg: #f6efd9;
+            --test-border: #e3d9b5;
+            --focus: #b3007a55;
         }
         @media (prefers-color-scheme: dark) {
             :root {
@@ -42,6 +49,13 @@
                 --accent-hover: #ff8acc;
                 --code-bg: #0f0f0c;
                 --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+                --live: #6cd49a;
+                --live-bg: #16291f;
+                --live-border: #1f3d2c;
+                --test: #e5c878;
+                --test-bg: #2a2517;
+                --test-border: #3d3522;
+                --focus: #ff5fb866;
             }
         }
         * { box-sizing: border-box; }
@@ -52,6 +66,11 @@
             color: var(--text);
             line-height: 1.55;
             -webkit-font-smoothing: antialiased;
+        }
+        :focus-visible {
+            outline: 2px solid var(--focus);
+            outline-offset: 2px;
+            border-radius: 4px;
         }
         .wrap {
             max-width: 760px;
@@ -80,6 +99,7 @@
             max-width: 56ch;
         }
         section { margin-top: 2.25rem; }
+        section > h2 + .hint { margin: -0.4rem 0 0.85rem; }
         h2 {
             font-size: 0.78rem;
             text-transform: uppercase;
@@ -87,6 +107,19 @@
             color: var(--text-muted);
             font-weight: 600;
             margin: 0 0 0.85rem;
+        }
+        .hint {
+            font-size: 0.88rem;
+            color: var(--text-muted);
+            margin: 0 0 0.85rem;
+            max-width: 60ch;
+        }
+        .hint code {
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 0 0.3rem;
+            font-size: 0.82em;
         }
         .card {
             background: var(--surface);
@@ -96,6 +129,9 @@
             box-shadow: var(--shadow);
         }
         .card + .card { margin-top: 0.6rem; }
+        .pkh-wrap {
+            position: relative;
+        }
         .pkh {
             font-family: "SF Mono", "Menlo", "Consolas", monospace;
             font-size: 0.84rem;
@@ -103,14 +139,36 @@
             word-break: break-all;
             background: var(--code-bg);
             padding: 0.75rem 0.9rem;
+            padding-right: 4.25rem;
             border-radius: 6px;
             border: 1px solid var(--border);
             display: block;
         }
+        .copy {
+            font: inherit;
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 0.2rem 0.5rem;
+            cursor: pointer;
+            transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+        }
+        .copy:hover { color: var(--accent); border-color: var(--accent); }
+        .copy.copied { color: var(--live); border-color: var(--live-border); background: var(--live-bg); }
+        .pkh-wrap .copy {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+        }
         .net {
             display: flex;
             flex-direction: column;
-            gap: 0.55rem;
+            gap: 0.6rem;
         }
         .net-head {
             display: flex;
@@ -123,32 +181,46 @@
             text-transform: capitalize;
         }
         .badge {
-            font-size: 0.7rem;
+            font-size: 0.68rem;
+            font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.06em;
-            padding: 0.15rem 0.45rem;
+            letter-spacing: 0.08em;
+            padding: 0.12rem 0.5rem;
             border-radius: 999px;
             background: var(--surface-2);
             color: var(--text-muted);
             border: 1px solid var(--border);
         }
+        .badge.live {
+            color: var(--live);
+            background: var(--live-bg);
+            border-color: var(--live-border);
+        }
+        .badge.test {
+            color: var(--test);
+            background: var(--test-bg);
+            border-color: var(--test-border);
+        }
         .row {
             display: flex;
             gap: 0.5rem;
             font-size: 0.82rem;
-            align-items: baseline;
+            align-items: center;
             flex-wrap: wrap;
         }
         .row .k {
             color: var(--text-muted);
-            min-width: 4rem;
+            min-width: 4.5rem;
+            flex-shrink: 0;
         }
         .row .v {
             font-family: "SF Mono", "Menlo", "Consolas", monospace;
             color: var(--text);
             word-break: break-all;
             flex: 1;
+            min-width: 0;
         }
+        .row .copy { flex-shrink: 0; }
         a {
             color: var(--accent);
             text-decoration: none;
@@ -156,16 +228,33 @@
             transition: border-color 120ms ease, color 120ms ease;
         }
         a:hover { color: var(--accent-hover); border-bottom-color: currentColor; }
+        .code-wrap {
+            position: relative;
+        }
+        .code-wrap .copy {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+        }
         pre {
             background: var(--code-bg);
             border: 1px solid var(--border);
             border-radius: 6px;
             padding: 0.85rem 1rem;
+            padding-right: 4.25rem;
             overflow-x: auto;
             font-family: "SF Mono", "Menlo", "Consolas", monospace;
             font-size: 0.82rem;
             margin: 0;
             color: var(--text);
+        }
+        pre + .response-label {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            font-weight: 600;
+            margin: 0.85rem 0 0.4rem;
         }
         code { font-family: "SF Mono", "Menlo", "Consolas", monospace; font-size: 0.9em; }
         ul.links {
@@ -206,6 +295,11 @@
             flex-wrap: wrap;
         }
         footer .ver { font-family: "SF Mono", "Menlo", "Consolas", monospace; }
+        @media (max-width: 480px) {
+            .wrap { padding: 2.5rem 1.1rem 3rem; }
+            h1 { font-size: 1.65rem; }
+            .row .k { min-width: 0; flex-basis: 100%; }
+        }
     </style>
 </head>
 <body>
@@ -222,28 +316,45 @@
 
         <section>
             <h2>Required Signer Hash</h2>
-            <code class="pkh">{{ pkh }}</code>
+            <p class="hint">
+                Add this PKH to your transaction's <code>required_signers</code> field.
+                It must match the entry under your chosen network in
+                <a href="/known_hosts/">known_hosts</a> — verify before signing.
+            </p>
+            <div class="pkh-wrap">
+                <code class="pkh" id="pkh-value">{{ pkh }}</code>
+                <button type="button" class="copy" data-copy="#pkh-value" aria-label="Copy PKH">Copy</button>
+            </div>
         </section>
 
         <section>
             <h2>Available Networks</h2>
             {% if networks %}
+                <p class="hint">
+                    Pick the network your transaction targets and POST its CBOR to the matching endpoint.
+                </p>
                 {% for net in networks %}
                 <div class="card net">
                     <div class="net-head">
                         <span class="net-name">{{ net.name }}</span>
-                        <span class="badge">collateral</span>
+                        {% if net.name == "mainnet" %}
+                        <span class="badge live">Live</span>
+                        {% else %}
+                        <span class="badge test">Test</span>
+                        {% endif %}
                     </div>
                     {% if net.url %}
                     <div class="row">
                         <span class="k">Endpoint</span>
-                        <span class="v"><a href="{{ net.url }}">{{ net.url }}</a></span>
+                        <span class="v" id="ep-{{ forloop.counter }}">{{ net.url }}</span>
+                        <button type="button" class="copy" data-copy="#ep-{{ forloop.counter }}" aria-label="Copy endpoint URL">Copy</button>
                     </div>
                     {% endif %}
                     {% if net.utxo_id %}
                     <div class="row">
                         <span class="k">UTxO</span>
-                        <span class="v">{{ net.utxo_id }}#{{ net.utxo_idx }}</span>
+                        <span class="v" id="utxo-{{ forloop.counter }}">{{ net.utxo_id }}#{{ net.utxo_idx }}</span>
+                        <button type="button" class="copy" data-copy="#utxo-{{ forloop.counter }}" aria-label="Copy UTxO reference">Copy</button>
                     </div>
                     {% endif %}
                 </div>
@@ -262,9 +373,18 @@
 
         <section>
             <h2>Quick start</h2>
-            <pre>curl -X POST {{ request.scheme }}://{{ request.get_host }}/&lt;network&gt;/collateral/ \
+            <p class="hint">
+                Send the transaction CBOR; receive the vkey witness. Attach it to your
+                tx's witness set, then submit through your usual node or relay.
+            </p>
+            <div class="code-wrap">
+                <pre id="curl-example">curl -X POST {{ request.scheme }}://{{ request.get_host }}/{{ example_network }}/collateral/ \
      -H 'Content-Type: application/json' \
      -d '{ "tx": "&lt;hex cbor&gt;" }'</pre>
+                <button type="button" class="copy" data-copy="#curl-example" aria-label="Copy curl command">Copy</button>
+            </div>
+            <p class="response-label">Response</p>
+            <pre>{ "witness": "8200825820&lt;pubkey&gt;5840&lt;signature&gt;" }</pre>
         </section>
 
         <section>
@@ -281,5 +401,28 @@
             <span class="ver">v{{ version }}</span>
         </footer>
     </div>
+    <script>
+        document.querySelectorAll('button.copy[data-copy]').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                const sel = btn.getAttribute('data-copy');
+                const src = sel ? document.querySelector(sel) : null;
+                if (!src) return;
+                const text = (src.textContent || '').trim();
+                try {
+                    await navigator.clipboard.writeText(text);
+                } catch {
+                    return;
+                }
+                const original = btn.dataset.label || btn.textContent;
+                btn.dataset.label = original;
+                btn.textContent = 'Copied';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = original;
+                    btn.classList.remove('copied');
+                }, 1200);
+            });
+        });
+    </script>
 </body>
 </html>
