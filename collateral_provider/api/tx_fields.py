@@ -24,7 +24,3 @@ PROPOSAL_PROCEDURES = 20
 
 # CBOR tag used to mark canonicalized sets in the Cardano body
 SET_TAG = 258
-
-# Maximum transaction size in bytes (matches the on-chain protocol parameter
-# for the Conway era).
-MAX_TX_SIZE = 16_384

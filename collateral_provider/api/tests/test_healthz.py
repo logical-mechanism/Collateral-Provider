@@ -21,12 +21,15 @@ class TestHealthz(TestCase):
         self.assertIn("version", body)
 
     def test_returns_503_when_skey_missing(self):
-        with override_settings(SKEY_PATH="/nonexistent/payment.skey"):
+        secret_path = "/nonexistent/payment.skey"
+        with override_settings(SKEY_PATH=secret_path):
             response = self.client.get(self.url)
         self.assertEqual(response.status_code, 503)
         body = response.json()
         self.assertEqual(body["status"], "error")
-        self.assertTrue(any("skey missing" in p for p in body["problems"]))
+        # Public body says what's wrong by label only — never the path.
+        self.assertEqual(body["problems"], ["skey missing"])
+        self.assertNotIn(secret_path, response.content.decode())
 
     def test_returns_503_when_vkey_unreadable(self):
         # An existing-but-unreadable file: chmod 000 a tmp file.
@@ -38,12 +41,22 @@ class TestHealthz(TestCase):
             with override_settings(VKEY_PATH=path):
                 response = self.client.get(self.url)
             self.assertEqual(response.status_code, 503)
-            self.assertTrue(
-                any("vkey not readable" in p for p in response.json()["problems"])
-            )
+            body = response.json()
+            self.assertEqual(body["problems"], ["vkey unreadable"])
+            # The absolute path must not appear anywhere in the body.
+            self.assertNotIn(path, response.content.decode())
         finally:
             os.chmod(path, 0o600)
             os.unlink(path)
+
+    def test_healthz_sets_cache_control_no_store(self):
+        # An upstream proxy must not cache "ok" past the moment the
+        # signing keys disappear (or vice versa).
+        response = self.client.get(self.url)
+        self.assertEqual(response["Cache-Control"], "no-store")
+        with override_settings(SKEY_PATH="/nonexistent/payment.skey"):
+            response = self.client.get(self.url)
+        self.assertEqual(response["Cache-Control"], "no-store")
 
     def test_healthz_is_not_throttled(self):
         # Hit it many times in quick succession; nothing should 429.

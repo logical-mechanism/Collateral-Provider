@@ -9,15 +9,16 @@ of DRF↔HTTP-client coupling.
 
 import json
 
+from django.conf import settings
 from rest_framework import serializers
 
-# Cap the JSON-encoded `additional_utxos` field. A single Cardano UTxO
-# can hold up to ~16 KiB on chain; 32 KiB gives generous headroom for
-# a couple of large pre-chain UTxOs forwarded as Ogmios additionalUtxo.
-# The wider request body cap (DATA_UPLOAD_MAX_MEMORY_SIZE) catches
-# anything larger than that anyway, but pinning the field cap here
-# means we reject without dragging the whole body into the validator.
-ADDITIONAL_UTXOS_MAX_BYTES = 32 * 1024
+# Practical cap on the count of `additional_utxos` entries. The byte cap
+# (settings.ADDITIONAL_UTXOS_MAX_BYTES) catches large entries; this
+# count cap catches the orthogonal case of many tiny entries that would
+# pass the byte cap but still make Koios chew through hundreds of UTxOs
+# per request. Real workloads need 1-5 entries; 400 is far above any
+# legitimate use.
+ADDITIONAL_UTXOS_MAX_COUNT = 400
 
 
 class ProvideCollateralSerializer(serializers.Serializer):
@@ -31,17 +32,20 @@ class ProvideCollateralSerializer(serializers.Serializer):
 
     tx = serializers.CharField(allow_blank=False, trim_whitespace=True)
     # Loose by design: we don't mirror Ogmios's full UTxO schema here.
-    # We do enforce the [txin, txout] pair shape and a total-bytes cap
-    # in validate_additional_utxos so a malformed or oversized payload
-    # fails locally instead of burning a Koios round-trip.
+    # We do enforce the [txin, txout] pair shape, a per-request count
+    # cap, and a total-bytes cap in validate_additional_utxos so a
+    # malformed or oversized payload fails locally instead of burning
+    # a Koios round-trip.
     additional_utxos = serializers.ListField(
         required=False,
         allow_empty=True,
+        max_length=ADDITIONAL_UTXOS_MAX_COUNT,
         child=serializers.JSONField(),
         help_text=(
             "Optional list of [txin, txout] pairs spliced into the chain "
             "state for script evaluation. Forwarded to Ogmios as "
-            "`additionalUtxo`. Missing or empty is fine — skipped."
+            "`additionalUtxo`. Missing or empty is fine — skipped. "
+            f"At most {ADDITIONAL_UTXOS_MAX_COUNT} entries."
         ),
     )
 
@@ -65,9 +69,9 @@ class ProvideCollateralSerializer(serializers.Serializer):
                 )
 
         encoded_size = len(json.dumps(value))
-        if encoded_size > ADDITIONAL_UTXOS_MAX_BYTES:
+        if encoded_size > settings.ADDITIONAL_UTXOS_MAX_BYTES:
             raise serializers.ValidationError(
-                f"additional_utxos exceeds {ADDITIONAL_UTXOS_MAX_BYTES} bytes."
+                f"additional_utxos exceeds {settings.ADDITIONAL_UTXOS_MAX_BYTES} bytes."
             )
 
         return value

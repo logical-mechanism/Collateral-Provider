@@ -16,57 +16,20 @@ HTTP contract:
 
 ## [Unreleased]
 
-### Removed
-
-- **Legacy `tx_body` request field.** The transition release that
-  accepted both `tx` and `tx_body` is over. Clients must send `tx`.
-  Sending `tx_body` now returns a 400 (`tx` field required).
-
-### Changed
-
-- **JSON-only request bodies on `/<env>/collateral/`.** DRF's default
-  also accepted form-encoded and multipart, which was undocumented
-  surface area. Non-JSON content types now return 415.
-- **Body-size cap dropped from Django's 2.5 MiB default to 96 KiB**
-  (`DATA_UPLOAD_MAX_MEMORY_SIZE`). The protocol caps a tx at 16 KiB
-  binary (32 KiB hex); 96 KiB leaves room for the JSON envelope and
-  `additional_utxos` while making oversized junk cheap to reject.
-- **Validation orchestration moved out of the serializer** into
-  `api.services.collateral.issue_witness`. The serializer is now
-  shape-only; the service runs the validator chain, calls Koios, and
-  returns `(witness_hex, tx_hash_hex)`. No external behavior change.
-- **gunicorn switched from sync workers to `gthread`** (2 workers ×
-  8 threads). The whole product is IO-bound on Koios; the previous
-  2-sync-workers shape blocked one request per worker for the full
-  upstream RTT.
-- **Trailing slash now optional** on `/api/docs`, `/api/schema`, and
-  `/api/redoc`. Both `/api/docs` and `/api/docs/` resolve directly.
-
-### Added
-
-- **`additional_utxos` shape + size validation.** Each entry must be a
-  `[txin, txout]` pair of objects; the JSON-encoded field is capped at
-  32 KiB (`ADDITIONAL_UTXOS_MAX_BYTES`). Malformed or oversized input
-  fails locally instead of burning a Koios round-trip.
-- **`tx_hash` and `duration_ms` on the success log line.** JSON
-  formatter surfaces them as top-level fields; text formatter embeds
-  them in the message. Operators can now grep "did we sign tx X" by
-  hash.
-
 ### Added
 
 - **Optional `additional_utxos` request field.** Forwarded to Ogmios as
   [`additionalUtxo`](https://ogmios.dev/mini-protocols/local-tx-submission/#additional-utxo-set)
   on the `evaluateTransaction` call, so callers can splice in
   `[txin, txout]` pairs that don't yet exist on chain (chained-tx /
-  future-input scenarios). Missing or empty is skipped silently;
-  non-empty is forwarded verbatim — the inner Ogmios UTxO shape isn't
-  mirrored here, so a malformed entry surfaces as the standard
-  `Transaction Fails Validation` 400 from Koios's verdict, not as our
-  bug.
-
-### Added
-
+  future-input scenarios). Missing or empty is skipped silently. Each
+  entry must be a `[txin, txout]` pair of objects; the JSON-encoded
+  field is capped at 32 KiB and at most 400 entries — malformed or
+  oversized input fails locally instead of burning a Koios round-trip.
+- **`tx_hash` and `duration_ms` on the success log line.** JSON
+  formatter surfaces them as top-level fields; text formatter embeds
+  them in the message. Operators can now grep "did we sign tx X" by
+  hash.
 - **Container-platform deploy shape.** [`Dockerfile`](Dockerfile),
   [`docker-entrypoint.sh`](docker-entrypoint.sh), and
   [`.do/app.yaml`](.do/app.yaml) bundle a one-command DigitalOcean App
@@ -91,14 +54,52 @@ HTTP contract:
   image, boots the container with synthetic env, and curls `/healthz`
   + `/`. Catches Dockerfile / entrypoint / collectstatic / static-
   serving regressions the unit tests can't.
+- **Dependabot config** for `pip` and `github-actions` ecosystems.
+  Weekly schedule, security updates grouped.
 
 ### Changed
 
+- **JSON-only request bodies on `/<env>/collateral/`.** DRF's default
+  also accepted form-encoded and multipart, which was undocumented
+  surface area. Non-JSON content types now return 415.
+- **Body-size cap dropped from Django's 2.5 MiB default** to a value
+  derived from `MAX_TX_SIZE` and `ADDITIONAL_UTXOS_MAX_BYTES` (≈ 64
+  KiB by default). The protocol caps a tx at 16 KiB binary (32 KiB
+  hex); the derived cap leaves room for the JSON envelope and
+  `additional_utxos` while making oversized junk cheap to reject.
+- **`MAX_TX_SIZE` and `ADDITIONAL_UTXOS_MAX_BYTES` are now env-overridable**
+  from settings, so a future hard-fork that bumps the protocol
+  parameter doesn't require a code redeploy.
+- **Validation orchestration moved out of the serializer** into
+  `api.services.collateral.issue_witness`. The serializer is now
+  shape-only; the service runs the validator chain, calls Koios, and
+  returns `(witness_hex, tx_hash_hex)`. No external behavior change.
+- **gunicorn switched from sync workers to `gthread`** (2 workers ×
+  8 threads). The whole product is IO-bound on Koios; the previous
+  2-sync-workers shape blocked one request per worker for the full
+  upstream RTT.
+- **Trailing slash now optional** on `/api/docs`, `/api/schema`, and
+  `/api/redoc`. Both `/api/docs` and `/api/docs/` resolve directly.
+- **`/healthz` and `/known_hosts/` now set `Cache-Control: no-store`**
+  so an upstream proxy can't serve a stale "ok" after the keys go
+  missing or a stale registry after an operator edit.
+- **`/healthz` 503 body no longer leaks signing-key paths.** Public
+  `problems` list is label-only (`"skey unreadable"`); the path stays
+  in the WARNING-level log line for operator debug.
+- **Landing page and `/known_hosts/` are now GET-only.** A POST to
+  either previously returned 200; now returns 405.
 - **`settings.py` no longer hard-fails when `.env` is missing.**
   Container-platform deploys inject configuration via `os.environ`;
   there is no file. `django-environ` reads from the process env when
   no file is present. The required-vars check below still fails loudly
   if anything actually needed is unset.
+- **CI `pip-audit` now also audits `requirements-dev.txt`.**
+
+### Removed
+
+- **Legacy `tx_body` request field.** The transition release that
+  accepted both `tx` and `tx_body` is over. Clients must send `tx`.
+  Sending `tx_body` now returns a 400 (`tx` field required).
 
 ## [1.2.0] — 2026-05-06
 

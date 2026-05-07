@@ -1,0 +1,37 @@
+# Weekly Dependabot scans for both pinned Python deps and the GitHub
+# Actions used in CI. Security updates get grouped into one PR per
+# ecosystem so a flurry of CVEs doesn't fragment review.
+
+version: 2
+
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      runtime-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      runtime-versions:
+        applies-to: version-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 2

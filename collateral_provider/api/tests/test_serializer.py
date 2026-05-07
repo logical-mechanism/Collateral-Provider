@@ -69,3 +69,18 @@ class ProvideCollateralSerializerShapeTestCase(TestCase):
         })
         self.assertFalse(serializer.is_valid())
         self.assertIn('additional_utxos', serializer.errors)
+
+    def test_additional_utxos_count_capped(self):
+        # Many tiny pairs would pass the byte cap but still make Koios
+        # chew through hundreds of UTxOs per request. The count cap
+        # (currently 400) catches this orthogonal case.
+        from api.serializers import ADDITIONAL_UTXOS_MAX_COUNT
+        too_many = [
+            [{'transaction': {'id': 'a' * 64}, 'index': 0}, {'address': 'a'}]
+        ] * (ADDITIONAL_UTXOS_MAX_COUNT + 1)
+        serializer = ProvideCollateralSerializer(data={
+            'tx': 'deadbeef',
+            'additional_utxos': too_many,
+        })
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('additional_utxos', serializer.errors)

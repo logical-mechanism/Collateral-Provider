@@ -132,6 +132,20 @@ class TestLandingPages(TestCase):
         # Must be a JSON object, not a list, since it's keyed by PKH.
         self.assertIsInstance(response.json(), dict)
 
+    def test_known_hosts_sets_cache_control_no_store(self):
+        # The file is hot-reloadable; an upstream proxy serving a stale
+        # registry would defeat that.
+        response = self.client.get("/known_hosts/")
+        self.assertEqual(response["Cache-Control"], "no-store")
+
+    def test_landing_page_post_is_405(self):
+        response = self.client.post("/")
+        self.assertEqual(response.status_code, 405)
+
+    def test_known_hosts_post_is_405(self):
+        response = self.client.post("/known_hosts/")
+        self.assertEqual(response.status_code, 405)
+
 
 @override_settings(ALLOWED_HOSTS=["testserver"])
 class TestThrottle(TestCase):

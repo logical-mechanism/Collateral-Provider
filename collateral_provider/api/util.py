@@ -1,4 +1,5 @@
 import logging
+from typing import NoReturn
 
 from rest_framework import serializers
 from rest_framework.views import exception_handler as drf_exception_handler
@@ -6,7 +7,7 @@ from rest_framework.views import exception_handler as drf_exception_handler
 logger = logging.getLogger("api")
 
 
-def raise_validation_error(message: str) -> None:
+def raise_validation_error(message: str) -> NoReturn:
     """Log and raise a DRF ValidationError. Use for any client-facing input
     error that should surface as a 400 with the given message.
 

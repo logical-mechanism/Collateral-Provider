@@ -14,6 +14,7 @@ from django.http import (
     JsonResponse,
 )
 from django.shortcuts import redirect, render
+from django.views.decorators.http import require_GET
 from drf_spectacular.utils import (
     OpenApiExample,
     OpenApiParameter,
@@ -150,6 +151,7 @@ class ProvideCollateralThrottle(throttling.AnonRateThrottle):
                 description="Witness CBOR (hex). Decoded shape: `[0, [pubkey, signature]]`.",
             ),
             400: OpenApiResponse(description="Validation error — invalid environment, invalid CBOR, or tx fails the collateral-usage rules."),
+            415: OpenApiResponse(description="Unsupported media type — body must be application/json."),
             429: OpenApiResponse(description="Rate limit exceeded."),
             503: OpenApiResponse(description="Validation upstream (Koios) is unavailable; try again later."),
         },
@@ -273,24 +275,40 @@ class ProvideCollateralView(APIView):
 @api_view(["GET"])
 @throttle_classes([])
 def healthz_view(request):
+    # Two parallel lists: ``problems`` is what we return to the public
+    # caller (label-only, no filesystem leak); ``log_problems`` carries
+    # the absolute paths so the operator can grep their app log when
+    # the LB starts seeing 503s. Don't merge the two — anything in
+    # ``problems`` is world-readable.
     problems = []
+    log_problems = []
     for label, path in (("skey", settings.SKEY_PATH), ("vkey", settings.VKEY_PATH)):
         if not os.path.exists(path):
-            problems.append(f"{label} missing at {path}")
+            problems.append(f"{label} missing")
+            log_problems.append(f"{label} missing at {path}")
         elif not os.access(path, os.R_OK):
-            problems.append(f"{label} not readable at {path}")
+            problems.append(f"{label} unreadable")
+            log_problems.append(f"{label} unreadable at {path}")
     if not os.path.exists(_known_hosts_path()):
-        problems.append(f"known_hosts missing at {_known_hosts_path()}")
+        problems.append("known_hosts missing")
+        log_problems.append(f"known_hosts missing at {_known_hosts_path()}")
 
     if problems:
-        return Response(
+        for line in log_problems:
+            logger.warning("healthz: %s", line)
+        response = Response(
             {"status": "error", "problems": problems},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
-    return Response(
-        {"status": "ok", "version": settings.SPECTACULAR_SETTINGS["VERSION"]},
-        status=status.HTTP_200_OK,
-    )
+    else:
+        response = Response(
+            {"status": "ok", "version": settings.SPECTACULAR_SETTINGS["VERSION"]},
+            status=status.HTTP_200_OK,
+        )
+    # Don't let an upstream proxy cache "ok" past the moment the keys
+    # disappear (or vice versa).
+    response["Cache-Control"] = "no-store"
+    return response
 
 
 def metrics_view(request):
@@ -312,6 +330,7 @@ def metrics_view(request):
     return HttpResponse(generate_latest(), content_type=CONTENT_TYPE_LATEST)
 
 
+@require_GET
 def landing_page(request):
     """Render the public landing page. Shows the provider's PKH so a user
     can confirm they're talking to the right provider, plus the network
@@ -325,11 +344,16 @@ def landing_page(request):
     )
 
 
+@require_GET
 def known_hosts_view(request):
     """Return the full known-hosts registry as JSON. Returns ``{}`` if the
     file is missing — that's the same response shape as an empty registry,
-    so consumers don't have to handle two cases."""
-    return JsonResponse(_load_known_hosts())
+    so consumers don't have to handle two cases. ``Cache-Control: no-store``
+    so an upstream proxy can't serve a stale registry after an operator
+    edit (the file is hot-reloadable; caching defeats that)."""
+    response = JsonResponse(_load_known_hosts())
+    response["Cache-Control"] = "no-store"
+    return response
 
 
 def custom_page_not_found(request, exception):
