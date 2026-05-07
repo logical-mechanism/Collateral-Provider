@@ -9,7 +9,7 @@
 # or a mounted volume). The ApiConfig.ready() check at startup will
 # refuse to boot if they are missing.
 
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
