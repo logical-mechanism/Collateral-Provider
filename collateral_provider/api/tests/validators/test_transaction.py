@@ -16,7 +16,23 @@ class TestTransactionValidator(unittest.TestCase):
         # Koios accepted the tx — response includes a 'result' key.
         mock_eval.return_value = {"jsonrpc": "2.0", "result": []}
         check_valid_tx("deadbeef", "preprod")
-        mock_eval.assert_called_once_with("deadbeef", "preprod")
+        mock_eval.assert_called_once_with(
+            "deadbeef", "preprod", additional_utxos=None
+        )
+
+    @patch("api.validators.transaction.evaluate_transaction")
+    def test_additional_utxos_forwarded_when_provided(self, mock_eval):
+        mock_eval.return_value = {"jsonrpc": "2.0", "result": []}
+        extra = [
+            [
+                {"transaction": {"id": "ab" * 32}, "index": 0},
+                {"address": "addr_test1...", "value": {"ada": {"lovelace": 1_000_000}}},
+            ]
+        ]
+        check_valid_tx("deadbeef", "preprod", additional_utxos=extra)
+        mock_eval.assert_called_once_with(
+            "deadbeef", "preprod", additional_utxos=extra
+        )
 
     @patch("api.validators.transaction.evaluate_transaction")
     def test_invalid_tx_raises_validation_error(self, mock_eval):

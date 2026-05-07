@@ -69,6 +69,37 @@ class TestEvaluateTransaction(unittest.TestCase):
         self.assertEqual(sent_json["jsonrpc"], "2.0")
         self.assertEqual(sent_json["method"], "evaluateTransaction")
         self.assertEqual(sent_json["params"]["transaction"]["cbor"], "cafebabe")
+        # additionalUtxo only appears when the caller provided one.
+        self.assertNotIn("additionalUtxo", sent_json["params"])
+
+    @patch("api.simulate.requests.post")
+    def test_additional_utxos_forwarded_as_additionalUtxo(self, mock_post):
+        mock_post.return_value = _mock_response(200, {"result": []})
+        extra = [
+            [
+                {"transaction": {"id": "ab" * 32}, "index": 0},
+                {"address": "addr_test1...", "value": {"ada": {"lovelace": 1_000_000}}},
+            ]
+        ]
+        evaluate_transaction("cafebabe", "preprod", additional_utxos=extra)
+        params = mock_post.call_args.kwargs["json"]["params"]
+        self.assertEqual(params["additionalUtxo"], extra)
+
+    @patch("api.simulate.requests.post")
+    def test_empty_additional_utxos_omitted_from_payload(self, mock_post):
+        mock_post.return_value = _mock_response(200, {"result": []})
+        evaluate_transaction("cafebabe", "preprod", additional_utxos=[])
+        self.assertNotIn(
+            "additionalUtxo", mock_post.call_args.kwargs["json"]["params"]
+        )
+
+    @patch("api.simulate.requests.post")
+    def test_none_additional_utxos_omitted_from_payload(self, mock_post):
+        mock_post.return_value = _mock_response(200, {"result": []})
+        evaluate_transaction("cafebabe", "preprod", additional_utxos=None)
+        self.assertNotIn(
+            "additionalUtxo", mock_post.call_args.kwargs["json"]["params"]
+        )
 
     @patch("api.simulate.requests.post")
     def test_passes_timeout_to_requests(self, mock_post):

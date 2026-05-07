@@ -14,6 +14,14 @@ POST /<environment>/collateral/   { "tx": "<hex cbor>" }   →   { "witness": "<
 The historical request field name `tx_body` is still accepted as a
 deprecated alias and will be removed in a future major release.
 
+An optional `additional_utxos` field on the request is forwarded to Ogmios
+as [`additionalUtxo`](https://ogmios.dev/mini-protocols/local-tx-submission/#additional-utxo-set)
+so script evaluation can see UTxOs from a transaction not yet on chain.
+Each entry is a `[txin, txout]` pair in Ogmios's shape; the field is
+skipped when missing or empty. Inner shape isn't mirrored here — if
+Ogmios doesn't like an entry, you get the standard `Transaction Fails
+Validation` 400.
+
 Validation pipeline (cheap to expensive — first failure short-circuits the rest):
 
 1. Banned IP / unknown environment
