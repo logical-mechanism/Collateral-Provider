@@ -336,11 +336,33 @@ def landing_page(request):
     can confirm they're talking to the right provider, plus the network
     config from known.hosts.json keyed by that PKH."""
     hosts = _load_known_hosts()
-    networks = hosts.get(settings.PKH, "Public Key Hash Not Found In Known Hosts")
+    entry = hosts.get(settings.PKH)
+    # Extract the network -> {utxo, url} mapping for the friendly cards;
+    # ``public_key`` lives at the same depth but isn't a network. Fall
+    # back to an empty list so the template can render an explicit
+    # "not registered" notice rather than a confusing empty section.
+    networks = []
+    if isinstance(entry, dict):
+        for name, cfg in entry.items():
+            if name == "public_key" or not isinstance(cfg, dict):
+                continue
+            utxo = cfg.get("utxo") or {}
+            networks.append({
+                "name": name,
+                "url": cfg.get("url", ""),
+                "utxo_id": utxo.get("id", ""),
+                "utxo_idx": utxo.get("idx", 0),
+            })
     return render(
         request,
         "api/landing.html",
-        {"pkh": settings.PKH, "networks_json": json.dumps(networks, indent=4)},
+        {
+            "pkh": settings.PKH,
+            "networks": networks,
+            "registered": isinstance(entry, dict),
+            "version": settings.SPECTACULAR_SETTINGS["VERSION"],
+            "raw_networks_json": json.dumps(entry or {}, indent=2),
+        },
     )
 
 

@@ -165,7 +165,14 @@ class TestKnownHostsHotReload(TestCase):
     def test_landing_page_picks_up_new_hosts(self):
         from django.conf import settings as live_settings
 
-        _write_json(self.path, {live_settings.PKH: {"preprod": "v1"}})
+        def _entry(url):
+            return {
+                live_settings.PKH: {
+                    "preprod": {"url": url, "utxo": {"id": "ab" * 32, "idx": 0}},
+                },
+            }
+
+        _write_json(self.path, _entry("https://example.test/v1/collateral/"))
         _bump_mtime(self.path)
 
         with override_settings(KNOWN_HOSTS_PATH=self.path):
@@ -173,7 +180,7 @@ class TestKnownHostsHotReload(TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn(b"v1", response.content)
 
-            _write_json(self.path, {live_settings.PKH: {"preprod": "v2"}})
+            _write_json(self.path, _entry("https://example.test/v2/collateral/"))
             _bump_mtime(self.path)
 
             response = self.client.get("/")

@@ -62,8 +62,29 @@ class TestErrorEnvelope(TestCase):
         self.assertEqual(body["detail"], "Validation Service Unavailable")
 
     def test_no_field_names_leak_in_400_response(self):
-        # The most important reason for normalization: the response shouldn't
-        # leak our internal serializer field names ("tx") to clients.
+        # The response envelope must always be {"detail": "..."} — never a
+        # field-keyed dict. The detail MESSAGE may name the field (it's part
+        # of the public request contract and helps clients debug); what
+        # matters is that the top-level shape is canonical.
         response = self.client.post(self.url, {"tx": "not-hex"}, format="json")
         self.assertEqual(response.status_code, 400)
-        self.assertNotIn("tx", response.json())
+        body = response.json()
+        self.assertEqual(set(body.keys()), {"detail"})
+
+    def test_missing_required_field_names_the_field(self):
+        # DRF's default "This field is required." is undebuggable from the
+        # wire — clients can't tell which field they forgot. Pin the
+        # rephrased version so the next regression is obvious.
+        response = self.client.post(self.url, {}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "Missing required field: 'tx'"})
+
+    def test_null_field_names_the_field(self):
+        response = self.client.post(self.url, {"tx": None}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "Field 'tx' may not be null"})
+
+    def test_blank_field_names_the_field(self):
+        response = self.client.post(self.url, {"tx": ""}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "Field 'tx' may not be blank"})
