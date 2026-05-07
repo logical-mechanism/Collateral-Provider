@@ -18,6 +18,18 @@ HTTP contract:
 
 ### Added
 
+- **Optional `additional_utxos` request field.** Forwarded to Ogmios as
+  [`additionalUtxo`](https://ogmios.dev/mini-protocols/local-tx-submission/#additional-utxo-set)
+  on the `evaluateTransaction` call, so callers can splice in
+  `[txin, txout]` pairs that don't yet exist on chain (chained-tx /
+  future-input scenarios). Missing or empty is skipped silently;
+  non-empty is forwarded verbatim — the inner Ogmios UTxO shape isn't
+  mirrored here, so a malformed entry surfaces as the standard
+  `Transaction Fails Validation` 400 from Koios's verdict, not as our
+  bug.
+
+### Added
+
 - **Container-platform deploy shape.** [`Dockerfile`](Dockerfile),
   [`docker-entrypoint.sh`](docker-entrypoint.sh), and
   [`.do/app.yaml`](.do/app.yaml) bundle a one-command DigitalOcean App

@@ -22,6 +22,7 @@ class UpstreamUnavailable(Exception):
 def evaluate_transaction(
     tx_body_cbor_hex: str,
     environment: str,
+    additional_utxos: list | None = None,
     timeout: float | tuple[float, float] = DEFAULT_TIMEOUT,
 ) -> dict:
     """Submit the tx CBOR to Koios for script-evaluation simulation.
@@ -37,6 +38,13 @@ def evaluate_transaction(
     errors, timeouts, 5xx, and non-JSON bodies become ``UpstreamUnavailable``
     (which the view layer translates to a 503).
 
+    ``additional_utxos`` (Ogmios's ``additionalUtxo``) lets the caller
+    splice extra ``[txin, txout]`` pairs into the chain state Ogmios uses
+    to evaluate scripts — useful for transactions that depend on UTxOs
+    created by an as-yet-unsubmitted prior tx. We forward it verbatim if
+    non-empty; the inner shape isn't mirrored or validated here, so a
+    malformed entry surfaces as a Koios-side rejection, not an outage.
+
     The endpoint URL is taken from
     ``settings.ENVIRONMENTS[<env>]['KOIOS_URL']`` so operators can
     self-host Koios or use alternate networks (preview, sanchonet)
@@ -48,10 +56,13 @@ def evaluate_transaction(
         raise UpstreamUnavailable(f"unknown environment: {environment}")
 
     url = env_settings["KOIOS_URL"]
+    params: dict = {"transaction": {"cbor": tx_body_cbor_hex}}
+    if additional_utxos:
+        params["additionalUtxo"] = additional_utxos
     payload = {
         "jsonrpc": "2.0",
         "method": "evaluateTransaction",
-        "params": {"transaction": {"cbor": tx_body_cbor_hex}},
+        "params": params,
     }
     headers = {
         "accept": "application/json",

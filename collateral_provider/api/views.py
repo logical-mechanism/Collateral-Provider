@@ -159,6 +159,28 @@ class ProvideCollateralThrottle(throttling.AnonRateThrottle):
                 request_only=True,
             ),
             OpenApiExample(
+                "Sample request with additional_utxos",
+                value={
+                    "tx": "84a900d901028182582000...f5f6",
+                    "additional_utxos": [
+                        [
+                            {"transaction": {"id": "ab" * 32}, "index": 0},
+                            {
+                                "address": "addr_test1qz...",
+                                "value": {"ada": {"lovelace": 1500000}},
+                            },
+                        ],
+                    ],
+                },
+                request_only=True,
+                description=(
+                    "Optional `additional_utxos` is forwarded to Ogmios as "
+                    "`additionalUtxo` so script evaluation can see UTxOs "
+                    "from a transaction not yet on chain. Missing or empty "
+                    "is fine — the field is skipped."
+                ),
+            ),
+            OpenApiExample(
                 "Sample success",
                 value={"witness": "8200825820...5840..."},
                 response_only=True,
