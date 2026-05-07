@@ -122,22 +122,20 @@ class TestKoiosMetricsRecorded(TestCase):
 
     @patch("api.simulate.requests.post")
     def test_success_outcome(self, mock_post):
-        from api.metrics import koios_requests_total
         from api.simulate import evaluate_transaction
 
-        mock_post.return_value.raise_for_status = lambda: None
+        mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {"result": []}
         before = self._koios_outcome_value("preprod", "success")
         evaluate_transaction("deadbeef", "preprod")
         after = self._koios_outcome_value("preprod", "success")
         self.assertEqual(after - before, 1)
-        del koios_requests_total  # silence unused-import warnings
 
     @patch("api.simulate.requests.post")
     def test_tx_invalid_outcome(self, mock_post):
         from api.simulate import evaluate_transaction
 
-        mock_post.return_value.raise_for_status = lambda: None
+        mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {"error": {"code": -32602}}
         before = self._koios_outcome_value("preprod", "tx_invalid")
         evaluate_transaction("deadbeef", "preprod")
