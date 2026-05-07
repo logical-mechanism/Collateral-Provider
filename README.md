@@ -112,8 +112,16 @@ instead of returning 500s on the first request.
 ## Testing
 
 ```bash
+./test.sh                        # everything
+./test.sh api.tests.test_views   # single module
+./test.sh -v 2                   # verbose
+```
+
+Or directly:
+
+```bash
 cd collateral_provider
-python3 manage.py test          # ~70 tests, runs in <50ms, no network
+python3 manage.py test
 python3 -m coverage run --rcfile=../pyproject.toml manage.py test
 python3 -m coverage report
 ```
@@ -121,8 +129,8 @@ python3 -m coverage report
 ## Linting
 
 ```bash
-ruff check collateral_provider/
-ruff check --fix collateral_provider/
+./lint.sh         # check
+./lint.sh --fix   # auto-fix what's safe
 ```
 
 ## Running the server
