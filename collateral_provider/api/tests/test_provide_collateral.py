@@ -25,35 +25,35 @@ class ProvideCollateralTestCase(TestCase):
 
     def test_valid_tx_body_cbor_but_no_collateral(self):
         data = {
-            'tx_body': valid_tx_body_cbor_but_no_collateral(),
+            'tx': valid_tx_body_cbor_but_no_collateral(),
         }
         response = self.client.post(self.url, data, format='json')
         self.assertEqual(response.status_code, 400)
 
     def test_invalid_tx_body_cbor_missing_inputs(self):
         data = {
-            'tx_body': invalid_tx_body_cbor_missing_inputs(),
+            'tx': invalid_tx_body_cbor_missing_inputs(),
         }
         response = self.client.post(self.url, data, format='json')
         self.assertEqual(response.status_code, 400)
 
     def test_invalid_tx_body_missing_collateral(self):
         data = {
-            'tx_body': invalid_tx_body_missing_collateral(),
+            'tx': invalid_tx_body_missing_collateral(),
         }
         response = self.client.post(self.url, data, format='json')
         self.assertEqual(response.status_code, 400)
 
     def test_invalid_tx_body_cbor_spending_collateral(self):
         data = {
-            'tx_body': invalid_tx_body_cbor_spending_collateral(),
+            'tx': invalid_tx_body_cbor_spending_collateral(),
         }
         response = self.client.post(self.url, data, format='json')
         self.assertEqual(response.status_code, 400)
 
     def test_invalid_tx_body_cbor_is_lying(self):
         data = {
-            'tx_body': invalid_tx_body_cbor_is_lying(),
+            'tx': invalid_tx_body_cbor_is_lying(),
         }
         response = self.client.post(self.url, data, format='json')
         self.assertEqual(response.status_code, 400)

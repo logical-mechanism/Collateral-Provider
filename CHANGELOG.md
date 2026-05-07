@@ -16,6 +16,43 @@ HTTP contract:
 
 ## [Unreleased]
 
+### Removed
+
+- **Legacy `tx_body` request field.** The transition release that
+  accepted both `tx` and `tx_body` is over. Clients must send `tx`.
+  Sending `tx_body` now returns a 400 (`tx` field required).
+
+### Changed
+
+- **JSON-only request bodies on `/<env>/collateral/`.** DRF's default
+  also accepted form-encoded and multipart, which was undocumented
+  surface area. Non-JSON content types now return 415.
+- **Body-size cap dropped from Django's 2.5 MiB default to 96 KiB**
+  (`DATA_UPLOAD_MAX_MEMORY_SIZE`). The protocol caps a tx at 16 KiB
+  binary (32 KiB hex); 96 KiB leaves room for the JSON envelope and
+  `additional_utxos` while making oversized junk cheap to reject.
+- **Validation orchestration moved out of the serializer** into
+  `api.services.collateral.issue_witness`. The serializer is now
+  shape-only; the service runs the validator chain, calls Koios, and
+  returns `(witness_hex, tx_hash_hex)`. No external behavior change.
+- **gunicorn switched from sync workers to `gthread`** (2 workers ×
+  8 threads). The whole product is IO-bound on Koios; the previous
+  2-sync-workers shape blocked one request per worker for the full
+  upstream RTT.
+- **Trailing slash now optional** on `/api/docs`, `/api/schema`, and
+  `/api/redoc`. Both `/api/docs` and `/api/docs/` resolve directly.
+
+### Added
+
+- **`additional_utxos` shape + size validation.** Each entry must be a
+  `[txin, txout]` pair of objects; the JSON-encoded field is capped at
+  32 KiB (`ADDITIONAL_UTXOS_MAX_BYTES`). Malformed or oversized input
+  fails locally instead of burning a Koios round-trip.
+- **`tx_hash` and `duration_ms` on the success log line.** JSON
+  formatter surfaces them as top-level fields; text formatter embeds
+  them in the message. Operators can now grep "did we sign tx X" by
+  hash.
+
 ### Added
 
 - **Optional `additional_utxos` request field.** Forwarded to Ogmios as

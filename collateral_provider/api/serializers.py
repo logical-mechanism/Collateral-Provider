@@ -1,20 +1,23 @@
-import logging
+"""Request shape for the collateral endpoint.
 
-from django.conf import settings
+This serializer only validates the *shape* of the JSON body. The
+business pipeline (ban / env / CBOR / inputs / outputs / collateral /
+signers / upstream evaluation) lives in
+``api.services.collateral.issue_witness`` so the serializer stays free
+of DRF↔HTTP-client coupling.
+"""
+
+import json
+
 from rest_framework import serializers
 
-from api.validators.cbor import (
-    check_cbor_hex,
-    check_collateral,
-    check_inputs,
-    check_outputs,
-    check_signers,
-    check_tx_body,
-)
-from api.validators.environment import check_environment, check_ip_address
-from api.validators.transaction import check_valid_tx
-
-logger = logging.getLogger("api")
+# Cap the JSON-encoded `additional_utxos` field. A single Cardano UTxO
+# can hold up to ~16 KiB on chain; 32 KiB gives generous headroom for
+# a couple of large pre-chain UTxOs forwarded as Ogmios additionalUtxo.
+# The wider request body cap (DATA_UPLOAD_MAX_MEMORY_SIZE) catches
+# anything larger than that anyway, but pinning the field cap here
+# means we reject without dragging the whole body into the validator.
+ADDITIONAL_UTXOS_MAX_BYTES = 32 * 1024
 
 
 class ProvideCollateralSerializer(serializers.Serializer):
@@ -24,21 +27,13 @@ class ProvideCollateralSerializer(serializers.Serializer):
     ``[txin, txout]`` pairs that get forwarded verbatim to Ogmios as
     ``additionalUtxo`` so script evaluation can see UTxOs created by
     transactions not yet on chain.
-
-    For one transition release we also accept the historical name
-    ``tx_body`` as an alias — that name was misleading because the value
-    is the *whole transaction*, not just the body, but renaming would
-    have broken every client overnight. The alias path logs at INFO so
-    operators can see who's still on the old shape, and emits the
-    response under the new name regardless.
     """
 
     tx = serializers.CharField(allow_blank=False, trim_whitespace=True)
     # Loose by design: we don't mirror Ogmios's full UTxO schema here.
-    # The list is forwarded verbatim if non-empty, omitted otherwise.
-    # If individual entries are malformed, Koios returns a real verdict
-    # ("Transaction Fails Validation") rather than us spending effort to
-    # match shape upstream might evolve.
+    # We do enforce the [txin, txout] pair shape and a total-bytes cap
+    # in validate_additional_utxos so a malformed or oversized payload
+    # fails locally instead of burning a Koios round-trip.
     additional_utxos = serializers.ListField(
         required=False,
         allow_empty=True,
@@ -50,64 +45,29 @@ class ProvideCollateralSerializer(serializers.Serializer):
         ),
     )
 
-    LEGACY_FIELD = "tx_body"
+    def validate_additional_utxos(self, value):
+        """Cap size, require each entry to be a 2-element list of dicts.
 
-    def to_internal_value(self, data):
-        # Accept tx_body as a deprecated alias for tx. Reject the
-        # ambiguous case where the client sends both — they presumably
-        # meant something specific by sending the legacy name and we'd
-        # rather refuse than silently pick one.
-        if isinstance(data, dict):
-            has_tx = "tx" in data
-            has_legacy = self.LEGACY_FIELD in data
-            if has_tx and has_legacy:
-                raise serializers.ValidationError({
-                    "tx": (
-                        "Send either 'tx' or the deprecated 'tx_body', not both."
-                    ),
-                })
-            if has_legacy and not has_tx:
-                logger.info(
-                    "Client used deprecated '%s' field; treating as alias for 'tx'.",
-                    self.LEGACY_FIELD,
+        Empty input is normalized to ``None`` so the service treats it
+        as "skip" without a separate check.
+        """
+        if not value:
+            return None
+
+        for entry in value:
+            if not (isinstance(entry, list) and len(entry) == 2):
+                raise serializers.ValidationError(
+                    "Each additional_utxos entry must be a [txin, txout] pair."
                 )
-                data = {**data, "tx": data[self.LEGACY_FIELD]}
-        return super().to_internal_value(data)
+            if not (isinstance(entry[0], dict) and isinstance(entry[1], dict)):
+                raise serializers.ValidationError(
+                    "Both elements of an additional_utxos entry must be objects."
+                )
 
-    def validate_tx(self, tx_cbor: str) -> str:
-        """Run validation in cheap-to-expensive order. The first failure
-        raises ValidationError and short-circuits the rest."""
-        environment = self.context["environment"]
-        env_settings = self.context["env_settings"]
-        ip_address = self.context["ip_address"]
-        networks = self.context["networks"]
+        encoded_size = len(json.dumps(value))
+        if encoded_size > ADDITIONAL_UTXOS_MAX_BYTES:
+            raise serializers.ValidationError(
+                f"additional_utxos exceeds {ADDITIONAL_UTXOS_MAX_BYTES} bytes."
+            )
 
-        logger.debug("Validating tx from %s", ip_address)
-
-        check_ip_address(ip_address)
-        check_environment(environment, networks)
-
-        tx_bytes = check_cbor_hex(tx_cbor)
-        body = check_tx_body(tx_bytes)
-        check_inputs(body, env_settings)
-        check_outputs(body)
-        check_collateral(body, env_settings)
-        check_signers(body, settings.PKH)
-
-        # Pull additional_utxos straight from raw input — the field is
-        # declared on the serializer (so it shows up in OpenAPI) but we
-        # don't trust DRF's per-field validation order to have it ready
-        # by the time validate_tx runs. Anything that isn't a non-empty
-        # list is skipped, matching the "missing or incomplete = ignore"
-        # contract.
-        raw_extra = (
-            self.initial_data.get("additional_utxos")
-            if isinstance(self.initial_data, dict)
-            else None
-        )
-        additional_utxos = raw_extra if isinstance(raw_extra, list) and raw_extra else None
-
-        # Most expensive check last: it's a remote HTTP call.
-        check_valid_tx(tx_cbor, environment, additional_utxos=additional_utxos)
-
-        return tx_cbor
+        return value

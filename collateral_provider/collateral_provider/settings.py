@@ -185,7 +185,22 @@ REST_FRAMEWORK = {
     # those classes lazily import auth.User.
     'DEFAULT_AUTHENTICATION_CLASSES': [],
     'UNAUTHENTICATED_USER': None,
+    # JSON only. Form/multipart parsers are documented surface area we
+    # don't use, and a multipart upload of `tx=<cbor>` would otherwise
+    # succeed silently. Locking to JSON also makes the 415 response
+    # consistent with the OpenAPI spec.
+    'DEFAULT_PARSER_CLASSES': [
+        'rest_framework.parsers.JSONParser',
+    ],
 }
+
+# Cap inbound body size well below Django's 2.5 MiB default. The protocol
+# limits a tx to 16 KiB binary (32 KiB hex); the optional `additional_utxos`
+# field plus the JSON envelope fits comfortably in the remainder. Anything
+# beyond this is rejected before the body is parsed, so a junk payload
+# can't burn worker CPU just to be rejected by the validator.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 96 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 96 * 1024
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Cardano Collateral Provider API',

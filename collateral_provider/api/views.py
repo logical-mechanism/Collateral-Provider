@@ -2,6 +2,7 @@ import ipaddress
 import json
 import logging
 import os
+import time
 from functools import lru_cache
 from typing import ClassVar
 
@@ -29,7 +30,7 @@ from rest_framework.views import APIView
 
 from .data_files import MtimeReloadingJson
 from .serializers import ProvideCollateralSerializer
-from .signature import witness_tx_cbor
+from .services.collateral import issue_witness
 
 logger = logging.getLogger("api")
 
@@ -203,23 +204,37 @@ class ProvideCollateralView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        serializer = ProvideCollateralSerializer(
-            data=request.data,
-            context={
-                "environment": environment,
-                "env_settings": env_settings,
-                "ip_address": ip_address,
-                "networks": list(settings.ENVIRONMENTS.keys()),
-            },
-        )
+        serializer = ProvideCollateralSerializer(data=request.data)
         # raise_exception=True lets the custom DRF exception handler
         # normalize the response shape to {"detail": "..."} consistently
-        # with every other 4xx/5xx the API can produce. The validator
-        # already logged the specific reason at WARNING level.
+        # with every other 4xx/5xx the API can produce. Validators inside
+        # the service log their own warning-level reasons.
         serializer.is_valid(raise_exception=True)
-        tx_cbor = serializer.validated_data["tx"]
-        witness_cbor = witness_tx_cbor(tx_cbor, settings.SKEY_PATH, settings.VKEY_PATH)
-        logger.info("Witnessed tx: ip=%s env=%s", ip_address, environment)
+
+        started = time.monotonic()
+        witness_cbor, tx_hash = issue_witness(
+            tx_cbor=serializer.validated_data["tx"],
+            environment=environment,
+            env_settings=env_settings,
+            ip_address=ip_address,
+            networks=list(settings.ENVIRONMENTS.keys()),
+            additional_utxos=serializer.validated_data.get("additional_utxos"),
+        )
+        duration_ms = int((time.monotonic() - started) * 1000)
+        # Keep the structured fields on the record (JSON formatter
+        # surfaces them as top-level keys) while also embedding them in
+        # the message so the plain-text formatter prints something
+        # operators can grep without changing the format string.
+        logger.info(
+            "Witnessed tx: ip=%s env=%s tx_hash=%s duration_ms=%d",
+            ip_address, environment, tx_hash, duration_ms,
+            extra={
+                "ip": ip_address,
+                "env": environment,
+                "tx_hash": tx_hash,
+                "duration_ms": duration_ms,
+            },
+        )
         return Response({"witness": witness_cbor}, status=status.HTTP_200_OK)
 
 

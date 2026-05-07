@@ -34,8 +34,8 @@ def normalize_error_response(exc, context):
 
     DRF's default returns {field: [msg]} for serializer validation errors and
     {"detail": msg} for everything else. Clients shouldn't have to handle
-    both shapes, especially since field names leak our internal structure
-    (e.g. tx_body). Surface the first human-readable message under "detail"
+    both shapes, especially since the field names would leak our internal
+    structure. Surface the first human-readable message under "detail"
     and call it a day.
     """
     response = drf_exception_handler(exc, context)

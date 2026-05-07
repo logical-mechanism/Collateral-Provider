@@ -84,11 +84,18 @@ EXPOSE 8080
 # SKEY_PATH / VKEY_PATH point to.
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
-# Workers: 2-3 is appropriate for a single small instance. The file-based
-# cache backend shares throttle counters across workers on the same host.
-# Bind to 8080 because that's the port DO App Platform's HTTP router expects.
+# Workers + threads. The whole product is a thin wrapper around a Koios
+# HTTP call (~hundreds of ms p50, up to 5s read timeout). Sync workers
+# would block one request per worker for the whole RTT — gthread lets
+# each process juggle multiple in-flight requests while waiting on the
+# network, so concurrent capacity ≈ workers * threads. 2 * 8 = 16 is
+# plenty for a basic-xxs DO instance and uses negligible extra memory.
+# The file-based cache backend shares throttle counters across workers
+# on the same host. Bind to 8080 — the port DO App Platform expects.
 CMD ["gunicorn", "collateral_provider.wsgi:application", \
      "--bind", "0.0.0.0:8080", \
+     "--worker-class", "gthread", \
      "--workers", "2", \
+     "--threads", "8", \
      "--access-logfile", "-", \
      "--error-logfile", "-"]
