@@ -5,8 +5,10 @@ A Cardano transaction is encoded as a 4-element CBOR list:
     [ body_map, witness_set, is_valid_bool, auxiliary_data_or_nil ]
 
 The body itself is a CBOR map with integer keys. The set-typed fields
-(inputs, certificates, collateral inputs, required signers, reference
-inputs, proposal procedures) are wrapped in CBOR tag 258.
+(inputs, collateral inputs, required signers, ...) are wrapped in CBOR
+tag 258. Only the field constants the validators actually inspect live
+here — the signing path doesn't need them because we hash the body's
+raw byte slice directly rather than walking the parsed structure.
 """
 
 # Top-level transaction tuple positions
@@ -16,11 +18,8 @@ TX_IS_VALID = 2
 # Body map keys
 INPUTS = 0
 OUTPUTS = 1
-CERTIFICATES = 4
 COLLATERAL_INPUTS = 13
 REQUIRED_SIGNERS = 14
-REFERENCE_INPUTS = 18
-PROPOSAL_PROCEDURES = 20
 
 # CBOR tag used to mark canonicalized sets in the Cardano body
 SET_TAG = 258
