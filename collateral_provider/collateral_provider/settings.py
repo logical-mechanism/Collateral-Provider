@@ -72,6 +72,16 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 # Collateral endpoint throttle (per anonymous IP).
 COLLATERAL_THROTTLE_RATE = env('COLLATERAL_THROTTLE_RATE', default='60/min')
 
+# Operator-curated data files. The service reads them on every request
+# but only re-parses when the file's mtime advances. Default locations
+# put them next to the project (gitignored) so editing + atomic-rename
+# is the operator workflow.
+BANS_PATH = env('BANS_PATH', default=str(BASE_DIR / 'bans.json'))
+KNOWN_HOSTS_PATH = env(
+    'KNOWN_HOSTS_PATH',
+    default=str(BASE_DIR.parent / 'known.hosts.json'),
+)
+
 # Prometheus /metrics. Off by default — when off, the URL 404s. When on,
 # only IPs in METRICS_ALLOW_IPS (default: localhost) can reach it. Run
 # your scraper on the same host or behind a private network.

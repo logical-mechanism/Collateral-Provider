@@ -4,17 +4,12 @@ import tempfile
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
-from api import views
-
 
 @override_settings(ALLOWED_HOSTS=["testserver"])
 class TestHealthz(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.url = "/healthz"
-        # Clear the lru_cache on _load_known_hosts in case earlier tests
-        # populated it with stale state.
-        views._load_known_hosts.cache_clear()
 
     def test_returns_200_when_keys_and_known_hosts_present(self):
         # Default settings point SKEY_PATH/VKEY_PATH at api/key/payment.{skey,vkey}

@@ -1,0 +1,5 @@
+{
+  "_comment": "Operator-curated ban list. Copy this file to bans.json (next to manage.py, or wherever BANS_PATH points) and edit live — the service re-reads it on the next request after the mtime advances. Do not check the live bans.json into git.",
+  "addresses": [],
+  "ips": []
+}

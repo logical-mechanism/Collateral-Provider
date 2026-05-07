@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-from functools import lru_cache
 from typing import ClassVar
 
 from django.conf import settings
@@ -26,23 +25,35 @@ from rest_framework.decorators import api_view, throttle_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .data_files import MtimeReloadingJson
 from .serializers import ProvideCollateralSerializer
 from .signature import witness_tx_cbor
 
 logger = logging.getLogger("api")
 
 
+_known_hosts: MtimeReloadingJson | None = None
+
+
+def _known_hosts_loader() -> MtimeReloadingJson:
+    """Return the singleton loader, rebuilding if settings.KNOWN_HOSTS_PATH
+    has changed (so override_settings works in tests)."""
+    global _known_hosts
+    path = settings.KNOWN_HOSTS_PATH
+    if _known_hosts is None or _known_hosts.path != path:
+        _known_hosts = MtimeReloadingJson(path, default={})
+    return _known_hosts
+
+
 def _known_hosts_path() -> str:
-    return os.path.join(os.path.dirname(settings.BASE_DIR), "known.hosts.json")
+    """Used by /healthz to report whether the known-hosts file is on disk."""
+    return _known_hosts_loader().path
 
 
-@lru_cache(maxsize=1)
 def _load_known_hosts() -> dict:
-    """Load and cache known.hosts.json. The file is part of the deploy
-    bundle; it doesn't change at runtime, so reading it once per process
-    is enough."""
-    with open(_known_hosts_path()) as f:
-        return json.load(f)
+    """Return the parsed known-hosts registry, re-reading from disk if the
+    file has been updated since the last call."""
+    return _known_hosts_loader().get()
 
 
 def _client_ip(request) -> str | None:
@@ -223,10 +234,7 @@ def landing_page(request):
     """Render the public landing page. Shows the provider's PKH so a user
     can confirm they're talking to the right provider, plus the network
     config from known.hosts.json keyed by that PKH."""
-    try:
-        hosts = _load_known_hosts()
-    except FileNotFoundError:
-        hosts = {}
+    hosts = _load_known_hosts()
     networks = hosts.get(settings.PKH, "Public Key Hash Not Found In Known Hosts")
     return render(
         request,
@@ -236,11 +244,10 @@ def landing_page(request):
 
 
 def known_hosts_view(request):
-    """Return the full known-hosts registry as JSON."""
-    try:
-        return JsonResponse(_load_known_hosts())
-    except FileNotFoundError:
-        return JsonResponse({"detail": "Known Hosts File Not Found"}, status=404)
+    """Return the full known-hosts registry as JSON. Returns ``{}`` if the
+    file is missing — that's the same response shape as an empty registry,
+    so consumers don't have to handle two cases."""
+    return JsonResponse(_load_known_hosts())
 
 
 def custom_page_not_found(request, exception):
