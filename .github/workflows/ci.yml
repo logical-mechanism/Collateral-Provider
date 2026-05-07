@@ -81,3 +81,58 @@ jobs:
 
       - name: Audit runtime dependencies
         run: pip-audit -r requirements.txt
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: ci
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t collateral-provider:ci .
+
+      - name: Smoke test container
+        # Boot the image with synthetic env vars and the same all-zero
+        # dummy keys CI uses for the test suite, then hit /healthz and
+        # the landing page. Fails the workflow if either request 4xx/5xx's
+        # or the container dies during startup.
+        run: |
+          ZEROS="0000000000000000000000000000000000000000000000000000000000000000"
+          SKEY_JSON='{"type":"PaymentSigningKeyShelley_ed25519","description":"CI dummy — not real","cborHex":"5820'$ZEROS'"}'
+          VKEY_JSON='{"type":"PaymentVerificationKeyShelley_ed25519","description":"CI dummy — not real","cborHex":"5820'$ZEROS'"}'
+
+          docker run -d --name app -p 8080:8080 \
+            -e PKH=$ZEROS \
+            -e DJANGO_SECRET_KEY=ci-secret-key-not-for-production \
+            -e ENVIRONMENT=development \
+            -e SKEY_CONTENTS="$SKEY_JSON" \
+            -e VKEY_CONTENTS="$VKEY_JSON" \
+            -e PREPROD_TXID=$ZEROS \
+            -e PREPROD_TXIDX=0 \
+            -e "PREPROD_NETWORK=--testnet-magic 1" \
+            -e MAINNET_TXID=$ZEROS \
+            -e MAINNET_TXIDX=0 \
+            -e MAINNET_NETWORK=--mainnet \
+            collateral-provider:ci
+
+          # Give gunicorn a moment to bind. /healthz is the readiness signal.
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS http://localhost:8080/healthz > /tmp/health.json; then
+              echo "Healthcheck OK after ${i}s"
+              cat /tmp/health.json
+              break
+            fi
+            sleep 1
+            if [ "$i" = "10" ]; then
+              echo "Healthcheck never came up. Container logs:"
+              docker logs app
+              exit 1
+            fi
+          done
+
+          # Landing page should render without raising on the {% static %} tags.
+          curl -fsS http://localhost:8080/ > /dev/null
+
+          docker logs app
+          docker rm -f app
