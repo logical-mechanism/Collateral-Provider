@@ -1,6 +1,8 @@
+import ipaddress
 import json
 import logging
 import os
+from functools import lru_cache
 from typing import ClassVar
 
 from django.conf import settings
@@ -56,6 +58,38 @@ def _load_known_hosts() -> dict:
     return _known_hosts_loader().get()
 
 
+@lru_cache(maxsize=1)
+def _trusted_proxy_networks(entries: tuple[str, ...]) -> tuple[ipaddress._BaseNetwork, ...]:
+    """Parse TRUSTED_PROXY_IPS once into ip_network objects so the per-request
+    membership check is cheap. Bare IPs become single-host networks; CIDR
+    strings (e.g. ``10.0.0.0/8``) become the corresponding network. Invalid
+    entries are dropped with a warning rather than failing the request.
+
+    Container-platform deploys (DigitalOcean App Platform, Fly, Render, ...)
+    can't pin a single LB IP, but the container's REMOTE_ADDR is always
+    inside the platform's private network — listing the relevant private
+    CIDRs lets the throttle key off real client IPs again.
+    """
+    nets = []
+    for entry in entries:
+        try:
+            nets.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            logger.warning("Ignoring invalid TRUSTED_PROXY_IPS entry: %r", entry)
+    return tuple(nets)
+
+
+def _is_trusted_proxy(remote: str | None) -> bool:
+    if not remote:
+        return False
+    try:
+        peer = ipaddress.ip_address(remote)
+    except ValueError:
+        return False
+    networks = _trusted_proxy_networks(tuple(settings.TRUSTED_PROXY_IPS))
+    return any(peer in net for net in networks)
+
+
 def _client_ip(request) -> str | None:
     """Best-effort client IP extraction.
 
@@ -64,10 +98,14 @@ def _client_ip(request) -> str | None:
     REMOTE_ADDR directly — a client connecting to gunicorn without the
     proxy in front can't spoof their source IP and bypass the per-IP
     throttle just by setting an X-Forwarded-For header.
+
+    Entries in TRUSTED_PROXY_IPS may be bare IPs (``127.0.0.1``) or CIDR
+    blocks (``10.0.0.0/8``). The latter is needed on container platforms
+    that don't pin a single load-balancer IP.
     """
     remote = request.META.get("REMOTE_ADDR")
     xff = request.META.get("HTTP_X_FORWARDED_FOR")
-    if xff and remote in settings.TRUSTED_PROXY_IPS:
+    if xff and _is_trusted_proxy(remote):
         return xff.split(",")[0].strip()
     return remote
 

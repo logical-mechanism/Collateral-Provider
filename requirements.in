@@ -14,3 +14,4 @@ requests~=2.32
 prometheus-client~=0.21
 
 gunicorn~=23.0
+whitenoise~=6.7

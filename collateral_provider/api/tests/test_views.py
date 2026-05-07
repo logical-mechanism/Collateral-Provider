@@ -210,3 +210,36 @@ class TestClientIp(TestCase):
             REMOTE_ADDR="::1",
         )
         self.assertEqual(_client_ip(request), "2001:db8::1")
+
+    def test_cidr_block_in_trusted_proxies_is_honored(self):
+        # Container platforms (DO App Platform, etc.) source LB traffic
+        # from a private range rather than a single pinned IP. Listing
+        # the CIDR rather than every individual IP must Just Work.
+        request = self.factory.post(
+            "/",
+            HTTP_X_FORWARDED_FOR="1.2.3.4",
+            REMOTE_ADDR="10.42.7.99",
+        )
+        with override_settings(TRUSTED_PROXY_IPS=["10.0.0.0/8"]):
+            self.assertEqual(_client_ip(request), "1.2.3.4")
+
+    def test_remote_addr_outside_cidr_is_not_trusted(self):
+        request = self.factory.post(
+            "/",
+            HTTP_X_FORWARDED_FOR="1.2.3.4",
+            REMOTE_ADDR="8.8.8.8",
+        )
+        with override_settings(TRUSTED_PROXY_IPS=["10.0.0.0/8"]):
+            self.assertEqual(_client_ip(request), "8.8.8.8")
+
+    def test_invalid_cidr_entry_is_skipped_not_fatal(self):
+        # An operator typo in TRUSTED_PROXY_IPS should not 500 every
+        # request; the bad entry is logged and ignored, the valid one
+        # still works.
+        request = self.factory.post(
+            "/",
+            HTTP_X_FORWARDED_FOR="1.2.3.4",
+            REMOTE_ADDR="127.0.0.1",
+        )
+        with override_settings(TRUSTED_PROXY_IPS=["not-an-ip", "127.0.0.1"]):
+            self.assertEqual(_client_ip(request), "1.2.3.4")

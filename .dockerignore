@@ -1,0 +1,43 @@
+# Build context: keep it small and avoid leaking local secrets.
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local venv must not get baked in (huge + arch-specific)
+venv/
+
+# Dev-only env file — DO App Platform supplies env vars directly; if a
+# .env happens to exist on the developer's machine it would override
+# whatever DO injects, which is the opposite of what we want.
+collateral_provider/.env
+
+# Operator-curated runtime data and logs
+collateral_provider/.cache/
+collateral_provider/debug.log
+collateral_provider/debug.log.*
+collateral_provider/db.sqlite3
+collateral_provider/bans.json
+
+# Real signing keys MUST NOT enter the image. The CI dummies have the
+# same names, so the only safe rule is: never copy api/key/ at all.
+# Mount the real files via SKEY_PATH / VKEY_PATH at runtime instead.
+collateral_provider/api/key/
+
+# Git + editor noise
+.git/
+.gitignore
+.github/
+.idea/
+.vscode/
+
+# Docs/scripts that aren't needed inside the running image
+docs/
+guides/
+scripts/
+*.md

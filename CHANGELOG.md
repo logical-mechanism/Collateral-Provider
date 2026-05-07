@@ -16,6 +16,41 @@ HTTP contract:
 
 ## [Unreleased]
 
+### Added
+
+- **Container-platform deploy shape.** [`Dockerfile`](Dockerfile),
+  [`docker-entrypoint.sh`](docker-entrypoint.sh), and
+  [`.do/app.yaml`](.do/app.yaml) bundle a one-command DigitalOcean App
+  Platform deploy: push to `main` → DO rebuilds the image and rolls it
+  out behind their TLS-terminating router. Signing keys enter the
+  runtime via `SKEY_CONTENTS` / `VKEY_CONTENTS` SECRET env vars (or a
+  mounted volume); the entrypoint materializes them to `/run/keys/`
+  (tmpfs) before exec'ing gunicorn so the existing `ApiConfig.ready()`
+  signing-key check is satisfied. Operator runbook in
+  [`docs/DEPLOY.md`](docs/DEPLOY.md).
+- **`whitenoise`** dependency for in-process static-file serving so
+  the deployed container needs no separate web server. Picked the
+  non-manifest variant — the manifest one breaks template rendering
+  whenever `collectstatic` hasn't run yet, which includes the test
+  suite.
+- **CIDR support in `TRUSTED_PROXY_IPS`.** Each entry is parsed via
+  `ipaddress.ip_network` so single hosts (`127.0.0.1`) and blocks
+  (`10.0.0.0/8`) both work. Container platforms that don't pin a
+  single LB egress IP need this; without it the per-IP throttle would
+  collapse into a global one.
+- **CI Docker smoke test.** A second job in the workflow builds the
+  image, boots the container with synthetic env, and curls `/healthz`
+  + `/`. Catches Dockerfile / entrypoint / collectstatic / static-
+  serving regressions the unit tests can't.
+
+### Changed
+
+- **`settings.py` no longer hard-fails when `.env` is missing.**
+  Container-platform deploys inject configuration via `os.environ`;
+  there is no file. `django-environ` reads from the process env when
+  no file is present. The required-vars check below still fails loudly
+  if anything actually needed is unset.
+
 ## [1.2.0] — 2026-05-06
 
 A second polish pass focused on observability, 12-factor configuration,

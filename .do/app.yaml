@@ -1,0 +1,159 @@
+# DigitalOcean App Platform spec.
+#
+# Apply via:
+#   doctl apps create --spec .do/app.yaml          # first time
+#   doctl apps update <app-id> --spec .do/app.yaml # subsequent edits
+#
+# Push-to-main → DO rebuilds the Docker image and rolls it out. No SSH.
+#
+# Operator setup checklist lives in docs/DEPLOY.md. The short version:
+# fill in the three SECRET env vars (DJANGO_SECRET_KEY, SKEY_CONTENTS,
+# VKEY_CONTENTS), point the GitHub repo, set ALLOWED_HOSTS to the
+# DO-issued hostname (and your custom domain if applicable), and
+# `doctl apps create`.
+
+name: collateral-provider
+
+# One region is fine for a small service; pick whichever is closest to
+# the majority of your users / your Koios endpoint. nyc / sfo / fra / blr
+# / sgp / ams / syd / tor are all valid.
+region: nyc
+
+services:
+  - name: web
+    # Build the image from the repo's Dockerfile. App Platform watches
+    # the deploy_on_push branch and triggers a rebuild on every push.
+    dockerfile_path: Dockerfile
+
+    github:
+      repo: logical-mechanism/Collateral-Provider
+      branch: main
+      deploy_on_push: true
+
+    # Smallest paid tier. The service is light (one upstream, ed25519
+    # signatures, 16 KiB max payload), so basic-xxs is enough — bump
+    # only if /metrics shows actual saturation.
+    instance_size_slug: basic-xxs
+    instance_count: 1
+
+    http_port: 8080
+
+    # /healthz is unthrottled, returns 503 if signing keys become
+    # unreadable, and 200 otherwise. App Platform routes traffic to the
+    # instance only once this returns 200.
+    health_check:
+      http_path: /healthz
+      initial_delay_seconds: 10
+      period_seconds: 10
+      timeout_seconds: 3
+      success_threshold: 1
+      failure_threshold: 3
+
+    # Per-environment routing: this service is at the apex domain. Add
+    # a `domains:` block at the app level (below) for a custom domain.
+    routes:
+      - path: /
+
+    # === Environment variables ===
+    #
+    # Sensitive values are marked SECRET (encrypted at rest, never
+    # printed in logs). Plain values are GENERAL. Most of these are
+    # documented in collateral_provider/sample.env.
+    envs:
+      # --- Required: identity + signing ---
+      - key: PKH
+        scope: RUN_AND_BUILD_TIME
+        value: REPLACE_WITH_YOUR_COLLATERAL_PKH
+      - key: DJANGO_SECRET_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_WITH_A_50_CHAR_RANDOM_STRING
+
+      # Signing keys: paste the entire JSON content of payment.skey /
+      # payment.vkey here. The container's entrypoint writes them to
+      # /run/keys/ at boot and points SKEY_PATH / VKEY_PATH there.
+      # If you'd rather mount a volume, leave these empty and set
+      # SKEY_PATH / VKEY_PATH directly to point into the volume mount.
+      - key: SKEY_CONTENTS
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_WITH_PAYMENT_SKEY_JSON_CONTENT
+      - key: VKEY_CONTENTS
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_WITH_PAYMENT_VKEY_JSON_CONTENT
+
+      # --- Required: production posture ---
+      - key: ENVIRONMENT
+        value: production
+      - key: ALLOWED_HOSTS
+        # Comma-separated. Always include the DO-issued hostname plus
+        # any custom domain. Find the DO hostname in the App Platform
+        # web console under "Domains".
+        value: REPLACE_WITH_DO_HOSTNAME,your-custom-domain.example
+      - key: TRUSTED_PROXY_IPS
+        # DO App Platform's HTTP router connects to the container from
+        # a private IP — the exact address rotates and isn't pinned in
+        # any public docs. Listing the RFC1918 ranges is the right move
+        # here: the container is never directly reachable from the
+        # public internet, so any "private peer" must be the platform's
+        # router. CIDR support added specifically for this case.
+        value: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+
+      # --- Required: per-network configuration ---
+      - key: PREPROD_TXID
+        value: REPLACE_WITH_PREPROD_COLLATERAL_TXID
+      - key: PREPROD_TXIDX
+        value: "0"
+      - key: PREPROD_NETWORK
+        value: --testnet-magic 1
+      - key: MAINNET_TXID
+        value: REPLACE_WITH_MAINNET_COLLATERAL_TXID
+      - key: MAINNET_TXIDX
+        value: "0"
+      - key: MAINNET_NETWORK
+        value: --mainnet
+
+      # --- Optional but strongly recommended in production ---
+      # LOG_FORMAT=json and LOG_FILE=/dev/null are baked into the
+      # Dockerfile as defaults — App Platform captures gunicorn stdout
+      # and indexes the JSON fields. Override here only if you want
+      # plain-text logs or a different sink.
+      - key: LOG_LEVEL
+        value: INFO
+      - key: COLLATERAL_THROTTLE_RATE
+        value: 60/min
+
+      # /metrics is off by default. Turn it on only if you have a
+      # scraper IP to allowlist; leaving it off keeps the URL 404'd.
+      # - key: METRICS_ENABLED
+      #   value: "True"
+      # - key: METRICS_ALLOW_IPS
+      #   value: 127.0.0.1,::1,YOUR_SCRAPER_IP
+
+      # --- Hot-reloadable data files ---
+      # bans.json and known.hosts.json default to in-image paths, which
+      # means edits require a redeploy. To keep the hot-reload property,
+      # uncomment the volume below and the two PATH overrides:
+      # - key: BANS_PATH
+      #   value: /data/bans.json
+      # - key: KNOWN_HOSTS_PATH
+      #   value: /data/known.hosts.json
+
+# Persistent volume for hot-reloadable config.
+#
+# DO App Platform volumes survive deploys. Mount one at /data/, edit
+# bans.json / known.hosts.json via `doctl apps console` (or by re-
+# uploading the spec with new values), and the running service will
+# pick up the changes on the next request — no restart needed.
+#
+# Skip the entire block if you're OK redeploying to change bans/hosts.
+# volumes:
+#   - name: data
+#     mount_path: /data
+#     size_gib: 1
+
+# Add a custom domain here once it's verified in the App Platform UI.
+# domains:
+#   - domain: your-custom-domain.example
+#     type: PRIMARY
