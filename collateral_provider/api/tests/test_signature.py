@@ -1,9 +1,11 @@
 import os
 import tempfile
+import time
 
 from django.test import TestCase
 
 from api.signature import (
+    _clear_key_cache,
     create_witness_cbor,
     get_key_from_file,
     sign,
@@ -68,9 +70,7 @@ class SignatureTestCase(TestCase):
 
 class GetKeyFromFileTestCase(TestCase):
     def setUp(self):
-        # The lru_cache means tests can leak between each other; clear it
-        # before each test reads a tmp file with a new path.
-        get_key_from_file.cache_clear()
+        _clear_key_cache()
 
     def test_strips_cbor_tag_prefix(self):
         # 5820 is the CBOR tag for "byte string of length 32" — the leading 4
@@ -89,18 +89,45 @@ class GetKeyFromFileTestCase(TestCase):
         with self.assertRaises(OSError):
             get_key_from_file("/nonexistent/path/payment.skey")
 
-    def test_caches_repeated_reads(self):
-        # If the cache works we avoid re-opening the file on every signing
-        # request, which is the entire reason it exists.
+    def test_caches_when_mtime_unchanged(self):
+        # The hot path must avoid re-opening + json-decoding the skey on
+        # every signing request. We assert this by writing different content
+        # to the file but holding mtime constant — the cache should still
+        # serve the original value.
         with tempfile.NamedTemporaryFile(mode="w", suffix=".skey", delete=False) as f:
             f.write('{"cborHex": "5820' + "cd" * 32 + '"}')
             path = f.name
         try:
             first = get_key_from_file(path)
+            mtime_before = os.path.getmtime(path)
             with open(path, "w") as f:
                 f.write('{"cborHex": "5820' + "ef" * 32 + '"}')
+            os.utime(path, (mtime_before, mtime_before))
             second = get_key_from_file(path)
             self.assertEqual(first, second)
+        finally:
+            os.unlink(path)
+
+    def test_reloads_when_mtime_advances(self):
+        # An operator rotating keys (atomic write-tmp + rename) should see
+        # the new key picked up on the next signing request, without a
+        # service restart.
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".skey", delete=False) as f:
+            f.write('{"cborHex": "5820' + "11" * 32 + '"}')
+            path = f.name
+        try:
+            first = get_key_from_file(path)
+            self.assertEqual(first, "11" * 32)
+
+            time.sleep(0.01)  # ensure a noticeable mtime tick
+            with open(path, "w") as f:
+                f.write('{"cborHex": "5820' + "22" * 32 + '"}')
+            now = time.time()
+            os.utime(path, (now, now))
+
+            second = get_key_from_file(path)
+            self.assertEqual(second, "22" * 32)
+            self.assertNotEqual(first, second)
         finally:
             os.unlink(path)
 

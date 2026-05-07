@@ -1,7 +1,8 @@
 import binascii
 import hashlib
 import json
-from functools import lru_cache
+import os
+from threading import RLock
 
 import cbor2
 from nacl.encoding import RawEncoder
@@ -36,17 +37,40 @@ def _ordered_set(items) -> cbor2.CBORTag:
     return cbor2.CBORTag(SET_TAG, sorted(items))
 
 
-@lru_cache(maxsize=4)
-def get_key_from_file(file_path: str) -> str:
-    """Read a Cardano-CLI-style {"cborHex": "..."} key file and return the raw
-    key bytes as hex. The leading 4 hex chars are the CBOR byte-string tag and
-    are stripped so callers get just the key material.
+_key_cache: dict[str, tuple[float, str]] = {}
+_key_cache_lock = RLock()
 
-    Cached per-path because the keys never change during process lifetime.
-    Without the cache we'd open + json-decode the skey on every request."""
-    with open(file_path) as file:
-        data = json.load(file)
-    return data["cborHex"][4:]
+
+def get_key_from_file(file_path: str) -> str:
+    """Read a Cardano-CLI-style ``{"cborHex": "..."}`` key file and return
+    the raw key bytes as hex. The leading 4 hex chars are the CBOR
+    byte-string tag and are stripped.
+
+    Cached by ``(path, mtime)``: a key rotation (atomic write of a new
+    skey/vkey) is picked up on the next signing request without restarting
+    the process. The hot-path cost is one ``os.path.getmtime`` syscall.
+    Concurrent re-reads are serialized under a lock so two threads racing
+    to load a freshly-rotated key don't both end up parsing the file.
+    """
+    mtime = os.path.getmtime(file_path)
+    cached = _key_cache.get(file_path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    with _key_cache_lock:
+        cached = _key_cache.get(file_path)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+        with open(file_path) as file:
+            data = json.load(file)
+        hex_value = data["cborHex"][4:]
+        _key_cache[file_path] = (mtime, hex_value)
+        return hex_value
+
+
+def _clear_key_cache() -> None:
+    """Test helper: drop the in-memory cache so a fresh tmp file gets read."""
+    with _key_cache_lock:
+        _key_cache.clear()
 
 
 def sign(skey: str, msg: str) -> str:
