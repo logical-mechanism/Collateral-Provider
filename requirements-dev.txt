@@ -20,7 +20,7 @@ brotli==1.2.0
     # via geventhttpclient
 build==1.5.0
     # via pip-tools
-cbor2==5.9.0
+cbor2==6.0.1
     # via -r requirements.in
 certifi==2026.4.22
     # via
@@ -38,7 +38,7 @@ configargparse==1.7.5
     # via locust
 coverage==7.13.5
     # via -r requirements-dev.in
-django==5.2.14
+django==6.0.5
     # via
     #   -r requirements.in
     #   django-cors-headers
@@ -71,7 +71,7 @@ geventhttpclient==2.3.9
     # via locust
 greenlet==3.5.0
     # via gevent
-gunicorn==23.0.0
+gunicorn==26.0.0
     # via -r requirements.in
 h11==0.16.0
     # via wsproto
