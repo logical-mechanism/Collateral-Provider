@@ -31,9 +31,12 @@ jobs:
           pip install -r requirements-dev.txt
           pip install pip-audit
 
-      # The dev .env in the repo is gitignored; create one with values that
-      # are valid enough for the test suite. Tests don't talk to the network,
-      # so the txids/network strings just need to parse.
+      # The dev .env and signing keys in the repo are gitignored; create
+      # synthetic ones with values that are valid enough for the test suite.
+      # Tests don't talk to the network, so the txids/network strings just
+      # need to parse, and the signing keys just need to be Cardano-CLI-shape
+      # JSON with 32 bytes of hex (any bytes — tests don't verify witnesses
+      # against a known vkey).
       - name: Create test .env
         run: |
           cat > collateral_provider/.env <<'EOF'
@@ -48,6 +51,16 @@ jobs:
           MAINNET_TXIDX=0
           MAINNET_NETWORK=--mainnet
           EOF
+
+      - name: Create dummy signing keys
+        # All-zero "keys" — obviously not usable for anything real, and
+        # deterministic so a CI failure can be reproduced exactly.
+        # Real keys are local-only and never enter this repo.
+        run: |
+          mkdir -p collateral_provider/api/key
+          ZEROS="0000000000000000000000000000000000000000000000000000000000000000"
+          printf '{"type":"PaymentSigningKeyShelley_ed25519","description":"CI dummy — not real","cborHex":"5820%s"}' "$ZEROS" > collateral_provider/api/key/payment.skey
+          printf '{"type":"PaymentVerificationKeyShelley_ed25519","description":"CI dummy — not real","cborHex":"5820%s"}' "$ZEROS" > collateral_provider/api/key/payment.vkey
 
       - name: Lint (ruff)
         run: ruff check collateral_provider/
