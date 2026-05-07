@@ -57,12 +57,19 @@ def _load_known_hosts() -> dict:
 
 
 def _client_ip(request) -> str | None:
-    """Best-effort client IP extraction. Trusts X-Forwarded-For from the
-    reverse proxy (production deployment assumption — see README)."""
+    """Best-effort client IP extraction.
+
+    Only honors X-Forwarded-For when the immediate peer (Django's
+    REMOTE_ADDR) is in ``settings.TRUSTED_PROXY_IPS``. Otherwise returns
+    REMOTE_ADDR directly — a client connecting to gunicorn without the
+    proxy in front can't spoof their source IP and bypass the per-IP
+    throttle just by setting an X-Forwarded-For header.
+    """
+    remote = request.META.get("REMOTE_ADDR")
     xff = request.META.get("HTTP_X_FORWARDED_FOR")
-    if xff:
+    if xff and remote in settings.TRUSTED_PROXY_IPS:
         return xff.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR")
+    return remote
 
 
 class ProvideCollateralThrottle(throttling.AnonRateThrottle):

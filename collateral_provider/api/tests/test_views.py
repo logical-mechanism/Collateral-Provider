@@ -161,12 +161,16 @@ class TestThrottle(TestCase):
 
 class TestClientIp(TestCase):
     """_client_ip is what we throttle and log on, so its parsing has to be
-    correct under whatever X-Forwarded-For headers a reverse proxy sends."""
+    correct under whatever X-Forwarded-For headers a reverse proxy sends.
+    Trust is scoped to settings.TRUSTED_PROXY_IPS so an attacker connecting
+    to gunicorn directly can't forge their way past the throttle."""
 
     def setUp(self):
         self.factory = RequestFactory()
 
-    def test_uses_first_ip_in_xff_chain(self):
+    def test_uses_first_ip_in_xff_chain_when_proxy_is_trusted(self):
+        # RequestFactory's default REMOTE_ADDR is 127.0.0.1, which is in
+        # the default TRUSTED_PROXY_IPS list, so XFF is honored.
         request = self.factory.post("/", HTTP_X_FORWARDED_FOR="1.2.3.4, 5.6.7.8")
         self.assertEqual(_client_ip(request), "1.2.3.4")
 
@@ -177,3 +181,32 @@ class TestClientIp(TestCase):
     def test_falls_back_to_remote_addr_when_no_xff(self):
         request = self.factory.post("/", REMOTE_ADDR="2.2.2.2")
         self.assertEqual(_client_ip(request), "2.2.2.2")
+
+    def test_ignores_xff_when_remote_addr_is_not_a_trusted_proxy(self):
+        # An attacker connecting straight to gunicorn (REMOTE_ADDR is
+        # their real IP, not the proxy's) cannot forge XFF to bypass the
+        # throttle.
+        request = self.factory.post(
+            "/",
+            HTTP_X_FORWARDED_FOR="1.2.3.4",
+            REMOTE_ADDR="9.9.9.9",
+        )
+        with override_settings(TRUSTED_PROXY_IPS=["127.0.0.1"]):
+            self.assertEqual(_client_ip(request), "9.9.9.9")
+
+    def test_empty_trusted_proxies_disables_xff_entirely(self):
+        request = self.factory.post(
+            "/",
+            HTTP_X_FORWARDED_FOR="1.2.3.4",
+            REMOTE_ADDR="127.0.0.1",
+        )
+        with override_settings(TRUSTED_PROXY_IPS=[]):
+            self.assertEqual(_client_ip(request), "127.0.0.1")
+
+    def test_ipv6_loopback_proxy_is_trusted_by_default(self):
+        request = self.factory.post(
+            "/",
+            HTTP_X_FORWARDED_FOR="2001:db8::1",
+            REMOTE_ADDR="::1",
+        )
+        self.assertEqual(_client_ip(request), "2001:db8::1")

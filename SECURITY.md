@@ -55,6 +55,10 @@ If you're running this service:
       `X-Forwarded-Proto` from the proxy via `SECURE_PROXY_SSL_HEADER`.
 - [ ] Make sure the proxy strips/rewrites `X-Forwarded-For` so an external
       client can't spoof their source IP and bypass the per-IP throttle.
+      As a code-level safeguard, the service only honors `X-Forwarded-For`
+      when the immediate peer (`REMOTE_ADDR`) is in `TRUSTED_PROXY_IPS`
+      (default: `127.0.0.1`, `::1`). Set this list to your real proxy
+      egress IPs in multi-host deploys.
 - [ ] Subscribe to the GitHub repository's Dependabot/security alerts.
 - [ ] Pin to a known-good commit (don't deploy from `main` without review).
 - [ ] Probe `/healthz` from your load balancer; it returns 503 if the keys

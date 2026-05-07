@@ -72,6 +72,13 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 # Collateral endpoint throttle (per anonymous IP).
 COLLATERAL_THROTTLE_RATE = env('COLLATERAL_THROTTLE_RATE', default='60/min')
 
+# X-Forwarded-For is only trusted when the immediate connection (i.e. the
+# REMOTE_ADDR Django sees) is one of these IPs. Defaults to localhost,
+# which is right when nginx/Caddy lives on the same host. Multi-host
+# deploys should list every load-balancer / reverse-proxy egress IP.
+# An empty list disables XFF trust entirely.
+TRUSTED_PROXY_IPS = env.list('TRUSTED_PROXY_IPS', default=['127.0.0.1', '::1'])
+
 # Operator-curated data files. The service reads them on every request
 # but only re-parses when the file's mtime advances. Default locations
 # put them next to the project (gitignored) so editing + atomic-rename
