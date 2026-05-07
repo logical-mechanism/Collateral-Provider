@@ -1,5 +1,4 @@
 import os
-import sys
 from pathlib import Path
 
 import environ
@@ -11,16 +10,16 @@ from api import __version__ as API_VERSION
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Initialize environment variables
-env_file = os.path.join(BASE_DIR, '.env')
-
-# Check if the .env file exists
-if not os.path.exists(env_file):
-    print(f"Error: .env file is missing at {env_file}. Exiting.")
-    sys.exit(1)  # Exit the application with a non-zero status code
-
+# Configuration is read from process environment, with a .env file as an
+# optional convenience for local development. Container-platform deploys
+# (DigitalOcean App Platform, Heroku-style PaaS, Kubernetes) inject
+# variables directly via os.environ — there is no .env file in those
+# environments, and that is fine. The required-vars check below still
+# fails loudly if anything actually needed is unset.
 env = environ.Env()
-environ.Env.read_env(env_file)
+env_file = os.path.join(BASE_DIR, '.env')
+if os.path.exists(env_file):
+    environ.Env.read_env(env_file)
 
 # Identity / signing material. Both key paths default to the api/key dir
 # bundled with the repo (used in dev and tests); production deploys should
