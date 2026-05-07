@@ -2,40 +2,13 @@ import binascii
 import hashlib
 import json
 import os
+from io import BytesIO
 from threading import RLock
 
 import cbor2
 from nacl.encoding import RawEncoder
 from nacl.exceptions import BadSignatureError
 from nacl.signing import SigningKey, VerifyKey
-
-from api.tx_fields import (
-    CERTIFICATES,
-    COLLATERAL_INPUTS,
-    INPUTS,
-    PROPOSAL_PROCEDURES,
-    REFERENCE_INPUTS,
-    REQUIRED_SIGNERS,
-    SET_TAG,
-    TX_BODY,
-)
-
-# Body fields that are CBOR-tag-258 sets in Conway. Their contents must be
-# sorted and re-tagged before hashing — anything else produces a tx-id the
-# node will reject.
-_SET_BODY_FIELDS = (
-    INPUTS,
-    CERTIFICATES,
-    COLLATERAL_INPUTS,
-    REQUIRED_SIGNERS,
-    REFERENCE_INPUTS,
-    PROPOSAL_PROCEDURES,
-)
-
-
-def _ordered_set(items) -> cbor2.CBORTag:
-    return cbor2.CBORTag(SET_TAG, sorted(items))
-
 
 _key_cache: dict[str, tuple[float, str]] = {}
 _key_cache_lock = RLock()
@@ -95,18 +68,60 @@ def verify(vkey: str, signature: str, msg: str) -> bool:
         return False
 
 
+def _consume_array_header(stream: BytesIO) -> None:
+    """Advance ``stream`` past a CBOR array header (any length encoding).
+
+    Raises ``ValueError`` if the next byte isn't a CBOR major-type-4
+    (array) header. Both definite-length encodings (1, 2, 3, 5, or 9
+    header bytes) and the indefinite-length form (``0x9f``) are accepted;
+    in the indefinite case the stream is left positioned at the first
+    item, exactly as for definite-length, and the body element is then
+    consumed by the caller's single ``CBORDecoder.decode()`` call.
+    """
+    initial = stream.read(1)
+    if not initial:
+        raise ValueError("Empty CBOR")
+    byte = initial[0]
+    if byte >> 5 != 4:
+        raise ValueError(f"Expected CBOR array, got major type {byte >> 5}")
+    info = byte & 0x1F
+    if info < 24 or info == 31:
+        return
+    extra = {24: 1, 25: 2, 26: 4, 27: 8}.get(info)
+    if extra is None:
+        raise ValueError(f"Reserved CBOR array header info {info}")
+    stream.read(extra)
+
+
 def tx_id(tx_cbor: str) -> str:
-    """Compute the Blake2b-256 hash of the canonicalized transaction body."""
+    """Hash the body's exact byte slice from the input transaction CBOR.
+
+    The chain validates vkey witnesses against
+    ``blake2b(submitted_body_bytes)``: when a node receives a tx, it
+    hashes the body bytes as they appear on the wire, not a
+    re-serialization. To make our witness verify on submit, we have to
+    hash the *same* bytes the client will submit — never anything we
+    re-emit through cbor2. Re-emitting would only round-trip cleanly
+    when cbor2's serialization choices (definite vs. indefinite
+    lengths, integer widths, map-key ordering, set-tag presence) happen
+    to coincide with the client's tx-builder, which isn't a contract
+    we can rely on. Slicing the body byte-range out of the input
+    sidesteps the whole problem: whatever the client built, we hash
+    that.
+
+    The transaction is encoded as a 4-element CBOR array
+    ``[body, witness_set, is_valid, auxiliary_data]``. We advance past
+    the outer array header, snapshot the stream offset, decode exactly
+    one item (the body), then read the offset again — the difference
+    is the body's byte span.
+    """
     tx_bytes = bytes.fromhex(tx_cbor)
-    tx = cbor2.loads(tx_bytes)
-    body = tx[TX_BODY]
-
-    for idx in _SET_BODY_FIELDS:
-        if idx in body:
-            body[idx] = _ordered_set(body[idx])
-
-    body_cbor = cbor2.dumps(body)
-    return hashlib.blake2b(body_cbor, digest_size=32).hexdigest()
+    stream = BytesIO(tx_bytes)
+    _consume_array_header(stream)
+    body_start = stream.tell()
+    cbor2.CBORDecoder(stream).decode()
+    body_end = stream.tell()
+    return hashlib.blake2b(tx_bytes[body_start:body_end], digest_size=32).hexdigest()
 
 
 def create_witness_cbor(public_key: str, signature: str) -> str:
