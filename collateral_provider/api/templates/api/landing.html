@@ -13,40 +13,273 @@
     <meta property="og:type" content="website">
     <meta property="og:image" content="{% static 'android-chrome-512x512.png' %}">
     <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{% static 'apple-touch-icon.png' %}">
+    <link rel="manifest" href="{% static 'site.webmanifest' %}">
     <title>Cardano Collateral Provider</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            --bg: #fafaf7;
+            --surface: #ffffff;
+            --surface-2: #f3f2ec;
+            --border: #e6e3d9;
+            --text: #1c1c1a;
+            --text-muted: #5b5b55;
+            --accent: #b3007a;
+            --accent-hover: #870059;
+            --code-bg: #f3f2ec;
+            --shadow: 0 1px 2px rgba(20, 20, 20, 0.04);
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #14140f;
+                --surface: #1c1c18;
+                --surface-2: #232320;
+                --border: #2e2e29;
+                --text: #ececea;
+                --text-muted: #9b9b94;
+                --accent: #ff5fb8;
+                --accent-hover: #ff8acc;
+                --code-bg: #0f0f0c;
+                --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+            }
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.55;
+            -webkit-font-smoothing: antialiased;
+        }
+        .wrap {
+            max-width: 760px;
+            margin: 0 auto;
+            padding: 3.5rem 1.5rem 4rem;
+        }
+        header { margin-bottom: 2.5rem; }
+        .eyebrow {
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--accent);
+            font-weight: 600;
+            margin: 0 0 0.6rem;
+        }
+        h1 {
+            font-size: 1.95rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            margin: 0 0 0.6rem;
+        }
+        .lede {
+            font-size: 1.05rem;
+            color: var(--text-muted);
+            margin: 0;
+            max-width: 56ch;
+        }
+        section { margin-top: 2.25rem; }
+        h2 {
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+            font-weight: 600;
+            margin: 0 0 0.85rem;
+        }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem 1.1rem;
+            box-shadow: var(--shadow);
+        }
+        .card + .card { margin-top: 0.6rem; }
+        .pkh {
+            font-family: "SF Mono", "Menlo", "Consolas", monospace;
+            font-size: 0.84rem;
+            color: var(--text);
+            word-break: break-all;
+            background: var(--code-bg);
+            padding: 0.75rem 0.9rem;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            display: block;
+        }
+        .net {
+            display: flex;
+            flex-direction: column;
+            gap: 0.55rem;
+        }
+        .net-head {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+        }
+        .net-name {
+            font-weight: 600;
+            font-size: 0.95rem;
+            text-transform: capitalize;
+        }
+        .badge {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            padding: 0.15rem 0.45rem;
+            border-radius: 999px;
+            background: var(--surface-2);
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+        }
+        .row {
+            display: flex;
+            gap: 0.5rem;
+            font-size: 0.82rem;
+            align-items: baseline;
+            flex-wrap: wrap;
+        }
+        .row .k {
+            color: var(--text-muted);
+            min-width: 4rem;
+        }
+        .row .v {
+            font-family: "SF Mono", "Menlo", "Consolas", monospace;
+            color: var(--text);
+            word-break: break-all;
+            flex: 1;
+        }
+        a {
+            color: var(--accent);
+            text-decoration: none;
+            border-bottom: 1px solid transparent;
+            transition: border-color 120ms ease, color 120ms ease;
+        }
+        a:hover { color: var(--accent-hover); border-bottom-color: currentColor; }
+        pre {
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.85rem 1rem;
+            overflow-x: auto;
+            font-family: "SF Mono", "Menlo", "Consolas", monospace;
+            font-size: 0.82rem;
+            margin: 0;
+            color: var(--text);
+        }
+        code { font-family: "SF Mono", "Menlo", "Consolas", monospace; font-size: 0.9em; }
+        ul.links {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        ul.links li + li { margin-top: 0.4rem; }
+        ul.links a {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+        ul.links a::after {
+            content: "→";
+            color: var(--text-muted);
+            transition: transform 120ms ease;
+        }
+        ul.links a:hover::after { transform: translateX(2px); color: var(--accent); }
+        .notice {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            background: var(--surface-2);
+            border: 1px dashed var(--border);
+            border-radius: 6px;
+            padding: 0.75rem 0.9rem;
+        }
+        footer {
+            margin-top: 4rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 0.82rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        footer .ver { font-family: "SF Mono", "Menlo", "Consolas", monospace; }
+    </style>
 </head>
 <body>
-    <header>
-        <h1>Cardano Collateral Provider</h1>
-    </header>
-    <main>
+    <div class="wrap">
+        <header>
+            <p class="eyebrow">Cardano · Altruistic Collateral</p>
+            <h1>Shared collateral, signed on demand.</h1>
+            <p class="lede">
+                Build a transaction that uses this provider's collateral UTxO and PKH,
+                POST the CBOR, and get back a vkey witness to attach before submitting
+                on chain. No wallet collateral, no Blockfrost key, no full node required.
+            </p>
+        </header>
+
         <section>
-            <h2>Required Signer Hash:</h2>
-            <p>{{ pkh }}</p>
+            <h2>Required Signer Hash</h2>
+            <code class="pkh">{{ pkh }}</code>
         </section>
+
         <section>
-            <h2>Available Networks:</h2>
-            <pre>{{ networks_json }}</pre>
+            <h2>Available Networks</h2>
+            {% if networks %}
+                {% for net in networks %}
+                <div class="card net">
+                    <div class="net-head">
+                        <span class="net-name">{{ net.name }}</span>
+                        <span class="badge">collateral</span>
+                    </div>
+                    {% if net.url %}
+                    <div class="row">
+                        <span class="k">Endpoint</span>
+                        <span class="v"><a href="{{ net.url }}">{{ net.url }}</a></span>
+                    </div>
+                    {% endif %}
+                    {% if net.utxo_id %}
+                    <div class="row">
+                        <span class="k">UTxO</span>
+                        <span class="v">{{ net.utxo_id }}#{{ net.utxo_idx }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="notice">
+                    {% if registered %}
+                        This provider is registered but no networks are configured.
+                    {% else %}
+                        This provider's PKH is not yet listed in
+                        <code>known.hosts.json</code>. Open a PR to register it.
+                    {% endif %}
+                </div>
+            {% endif %}
         </section>
+
+        <section>
+            <h2>Quick start</h2>
+            <pre>curl -X POST {{ request.scheme }}://{{ request.get_host }}/&lt;network&gt;/collateral/ \
+     -H 'Content-Type: application/json' \
+     -d '{ "tx": "&lt;hex cbor&gt;" }'</pre>
+        </section>
+
         <section>
             <h2>Resources</h2>
-            <ul>
-                <li>
-                    <a href="https://github.com/logical-mechanism/Collateral-Provider?tab=readme-ov-file#example-use" target="_blank" rel="noopener noreferrer">
-                        View GitHub for Example Use
-                    </a>
-                </li>
-                <li>
-                    <a href="/known_hosts/">View Known Collateral Providers</a>
-                </li>
-                <li>
-                    <a href="/api/docs/">API Documentation</a>
-                </li>
+            <ul class="links">
+                <li><a href="https://github.com/logical-mechanism/Collateral-Provider?tab=readme-ov-file#example-use" rel="noopener noreferrer">GitHub &amp; example use</a></li>
+                <li><a href="/known_hosts/">Known collateral providers</a></li>
+                <li><a href="/api/docs/">API documentation</a></li>
             </ul>
         </section>
-    </main>
-    <footer>
-        <p>Created By Logical Mechanism LLC With ❤️</p>
-    </footer>
+
+        <footer>
+            <span>Created by Logical Mechanism LLC</span>
+            <span class="ver">v{{ version }}</span>
+        </footer>
+    </div>
 </body>
 </html>
