@@ -96,10 +96,6 @@ METRICS_ENABLED = env.bool('METRICS_ENABLED', default=False)
 METRICS_ALLOW_IPS = env.list('METRICS_ALLOW_IPS', default=['127.0.0.1', '::1'])
 
 INSTALLED_APPS = [
-    # auth + contenttypes are required because DRF imports User lazily for
-    # its default permission classes; we don't ship our own user system.
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
     'django.contrib.staticfiles',
     'rest_framework',
     'drf_spectacular',
@@ -179,6 +175,12 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': COLLATERAL_THROTTLE_RATE,  # only consulted by AnonRateThrottle subclasses
     },
+    # No auth — this is an open POST API. Disabling DRF's default auth
+    # classes (SessionAuthentication, BasicAuthentication) lets us drop
+    # django.contrib.auth + contenttypes from INSTALLED_APPS, since
+    # those classes lazily import auth.User.
+    'DEFAULT_AUTHENTICATION_CLASSES': [],
+    'UNAUTHENTICATED_USER': None,
 }
 
 SPECTACULAR_SETTINGS = {
