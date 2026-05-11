@@ -73,6 +73,45 @@ class TestAdditionalUtxosPassThrough(TestCase):
         self.assertEqual(mock_eval.call_args.kwargs.get("additional_utxos"), extra)
 
     @patch("api.validators.transaction.evaluate_transaction")
+    def test_flat_utxo_object_entries_accepted_and_forwarded(self, mock_eval):
+        # Callers that learned Ogmios v6's flat Utxo schema (e.g. by
+        # building against Koios docs directly) can send entries as
+        # single objects instead of [txin, txout] pairs. The serializer
+        # accepts them; simulate.py is responsible for normalization.
+        mock_eval.return_value = {"jsonrpc": "2.0", "result": []}
+        flat = [
+            {
+                "transaction": {"id": "a" * 64},
+                "index": 0,
+                "address": "addr_test1qz...",
+                "value": {"ada": {"lovelace": 1_500_000}},
+            }
+        ]
+        response = self.client.post(
+            self.url,
+            {"tx": build_happy_path_tx_cbor(), "additional_utxos": flat},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(mock_eval.call_args.kwargs.get("additional_utxos"), flat)
+
+    @patch("api.validators.transaction.evaluate_transaction")
+    def test_entry_that_is_neither_pair_nor_object_rejected(self, mock_eval):
+        # A bare string (or any non-list, non-dict) doesn't match either
+        # accepted shape and must fail locally with a clear message.
+        response = self.client.post(
+            self.url,
+            {
+                "tx": build_happy_path_tx_cbor(),
+                "additional_utxos": ["not-a-pair-or-object"],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("[txin, txout] pair or a flat Utxo object", response.json()["detail"])
+        mock_eval.assert_not_called()
+
+    @patch("api.validators.transaction.evaluate_transaction")
     def test_malformed_pair_rejected_locally_no_upstream_call(self, mock_eval):
         # An entry that isn't a 2-element [txin, txout] pair fails the
         # serializer's structural check before we issue the Koios call —

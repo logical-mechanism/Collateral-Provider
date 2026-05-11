@@ -14,10 +14,12 @@ POST /<environment>/collateral/   { "tx": "<hex cbor>" }   →   { "witness": "<
 An optional `additional_utxos` field on the request is forwarded to Ogmios
 as [`additionalUtxo`](https://ogmios.dev/mini-protocols/local-tx-submission/#additional-utxo-set)
 so script evaluation can see UTxOs from a transaction not yet on chain.
-Each entry is a `[txin, txout]` pair in Ogmios's shape; the field is
-skipped when missing or empty. Inner shape isn't mirrored here — if
-Ogmios doesn't like an entry, you get the standard `Transaction Fails
-Validation` 400.
+Each entry may be either a `[txin, txout]` pair (matching Ogmios's prose
+docs) or a flat Ogmios v6 `Utxo` object (what callers learn when building
+against Koios directly) — both shapes are accepted in the same request.
+The field is skipped when missing or empty. Inner shape isn't mirrored
+here — if Ogmios doesn't like an entry, you get the standard
+`Transaction Fails Validation` 400.
 
 Validation pipeline (cheap to expensive — first failure short-circuits the rest):
 

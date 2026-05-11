@@ -9,7 +9,7 @@ A Django + DRF service that takes a Cardano transaction CBOR from a user, valida
 The whole product is one main endpoint plus operational extras:
 
 ```
-POST /<environment>/collateral/   body: { "tx": "<hex cbor>", "additional_utxos"?: [[txin, txout], ...] }   -> { "witness": "<hex cbor>" }
+POST /<environment>/collateral/   body: { "tx": "<hex cbor>", "additional_utxos"?: [<[txin,txout] pair | flat Utxo>, ...] }   -> { "witness": "<hex cbor>" }
 GET  /healthz                                                          -> { "status": "ok", "version": "..." }
 GET  /known_hosts/                                                     -> registry JSON
 GET  /                                                                 -> landing HTML

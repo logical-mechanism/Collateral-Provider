@@ -161,7 +161,7 @@ class ProvideCollateralThrottle(throttling.AnonRateThrottle):
                 request_only=True,
             ),
             OpenApiExample(
-                "Sample request with additional_utxos",
+                "Sample request with additional_utxos ([txin, txout] pair shape)",
                 value={
                     "tx": "84a900d901028182582000...f5f6",
                     "additional_utxos": [
@@ -178,8 +178,32 @@ class ProvideCollateralThrottle(throttling.AnonRateThrottle):
                 description=(
                     "Optional `additional_utxos` is forwarded to Ogmios as "
                     "`additionalUtxo` so script evaluation can see UTxOs "
-                    "from a transaction not yet on chain. Missing or empty "
-                    "is fine — the field is skipped."
+                    "from a transaction not yet on chain. Each entry may "
+                    "be a `[txin, txout]` pair (shown here, matching the "
+                    "Ogmios prose docs) or a flat Ogmios v6 `Utxo` object "
+                    "(see next example). Missing or empty is fine — the "
+                    "field is skipped."
+                ),
+            ),
+            OpenApiExample(
+                "Sample request with additional_utxos (flat Utxo shape)",
+                value={
+                    "tx": "84a900d901028182582000...f5f6",
+                    "additional_utxos": [
+                        {
+                            "transaction": {"id": "ab" * 32},
+                            "index": 0,
+                            "address": "addr_test1qz...",
+                            "value": {"ada": {"lovelace": 1500000}},
+                        },
+                    ],
+                },
+                request_only=True,
+                description=(
+                    "Same field as the previous example, using the flat "
+                    "Ogmios v6 `Utxo` shape — what callers learn when "
+                    "building against Koios directly. Both shapes may be "
+                    "mixed in one request."
                 ),
             ),
             OpenApiExample(

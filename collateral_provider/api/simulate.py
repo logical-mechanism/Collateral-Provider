@@ -39,17 +39,22 @@ def evaluate_transaction(
     (which the view layer translates to a 503).
 
     ``additional_utxos`` (Ogmios's ``additionalUtxo``) lets the caller
-    splice extra ``[txin, txout]`` pairs into the chain state Ogmios uses
-    to evaluate scripts — useful for transactions that depend on UTxOs
-    created by an as-yet-unsubmitted prior tx. The public API takes
-    ``[txin, txout]`` pairs (matching the prose docs at
-    ogmios.dev/mini-protocols/local-tx-submission/#additional-utxo-set),
-    but Ogmios v6's JSON-RPC schema actually expects a flat ``Utxo``
-    object per entry — passing the tuple shape gets rejected with
-    ``"parsing TxIn failed, expected Object, but encountered Array"``.
-    We bridge that here by merging each pair into one object before
-    sending. Field-level shape inside the merged object isn't validated;
-    a malformed entry surfaces as a Koios-side rejection, not an outage.
+    splice extra UTxOs into the chain state Ogmios uses to evaluate
+    scripts — useful for transactions that depend on UTxOs created by
+    an as-yet-unsubmitted prior tx. We accept two input shapes per
+    entry:
+
+    * ``[txin, txout]`` 2-element list — matches the prose docs at
+      ogmios.dev/mini-protocols/local-tx-submission/#additional-utxo-set.
+      Ogmios v6 actually rejects this shape on the wire with
+      ``"parsing TxIn failed, expected Object, but encountered Array"``,
+      so we merge the pair into one object before sending.
+    * flat ``Utxo`` object — matches Ogmios v6's actual JSON-RPC schema,
+      which is what callers learn when building against Koios directly.
+      Forwarded unchanged.
+
+    Field-level shape inside an entry isn't validated here; a malformed
+    entry surfaces as a Koios-side rejection, not an outage.
 
     The endpoint URL is taken from
     ``settings.ENVIRONMENTS[<env>]['KOIOS_URL']`` so operators can
@@ -64,11 +69,15 @@ def evaluate_transaction(
     url = env_settings["KOIOS_URL"]
     params: dict = {"transaction": {"cbor": tx_body_cbor_hex}}
     if additional_utxos:
-        # Merge each [txin, txout] pair into a single Utxo object — see
-        # docstring above. Input fields (transaction, index) and output
-        # fields (address, value, datum, datumHash, script) don't
-        # overlap in the v6 schema, so a plain merge is unambiguous.
-        params["additionalUtxo"] = [{**txin, **txout} for txin, txout in additional_utxos]
+        # Normalize both accepted input shapes (see docstring) to the
+        # flat Utxo object Ogmios v6 expects on the wire. For the pair
+        # shape, input fields (transaction, index) and output fields
+        # (address, value, datum, datumHash, script) don't overlap in
+        # the v6 schema, so a plain merge is unambiguous.
+        params["additionalUtxo"] = [
+            entry if isinstance(entry, dict) else {**entry[0], **entry[1]}
+            for entry in additional_utxos
+        ]
     payload = {
         "jsonrpc": "2.0",
         "method": "evaluateTransaction",

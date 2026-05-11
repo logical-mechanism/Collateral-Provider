@@ -108,6 +108,41 @@ class TestEvaluateTransaction(unittest.TestCase):
         self.assertEqual(sent[0]["script"], txout["script"])
 
     @patch("api.simulate.requests.post")
+    def test_additional_utxos_flat_object_entries_pass_through(self, mock_post):
+        # When a caller already sends Ogmios v6's flat Utxo shape (e.g.
+        # they built against Koios docs directly), no merge is needed —
+        # the entry is forwarded unchanged.
+        mock_post.return_value = _mock_response(200, {"result": []})
+        flat = {
+            "transaction": {"id": "ab" * 32},
+            "index": 0,
+            "address": "addr_test1...",
+            "value": {"ada": {"lovelace": 1_000_000}},
+        }
+        evaluate_transaction("cafebabe", "preprod", additional_utxos=[flat])
+        sent = mock_post.call_args.kwargs["json"]["params"]["additionalUtxo"]
+        self.assertEqual(sent, [flat])
+
+    @patch("api.simulate.requests.post")
+    def test_additional_utxos_mixed_pair_and_flat_entries(self, mock_post):
+        # A single request may interleave both accepted input shapes;
+        # each is normalized independently to the flat wire shape.
+        mock_post.return_value = _mock_response(200, {"result": []})
+        txin = {"transaction": {"id": "ab" * 32}, "index": 0}
+        txout = {"address": "addr_test1...", "value": {"ada": {"lovelace": 1_000_000}}}
+        flat = {
+            "transaction": {"id": "cd" * 32},
+            "index": 1,
+            "address": "addr_test1...other",
+            "value": {"ada": {"lovelace": 2_000_000}},
+        }
+        evaluate_transaction(
+            "cafebabe", "preprod", additional_utxos=[[txin, txout], flat]
+        )
+        sent = mock_post.call_args.kwargs["json"]["params"]["additionalUtxo"]
+        self.assertEqual(sent, [{**txin, **txout}, flat])
+
+    @patch("api.simulate.requests.post")
     def test_empty_additional_utxos_omitted_from_payload(self, mock_post):
         mock_post.return_value = _mock_response(200, {"result": []})
         evaluate_transaction("cafebabe", "preprod", additional_utxos=[])

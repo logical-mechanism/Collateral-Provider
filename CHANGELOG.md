@@ -20,12 +20,16 @@ HTTP contract:
 
 - **Optional `additional_utxos` request field.** Forwarded to Ogmios as
   [`additionalUtxo`](https://ogmios.dev/mini-protocols/local-tx-submission/#additional-utxo-set)
-  on the `evaluateTransaction` call, so callers can splice in
-  `[txin, txout]` pairs that don't yet exist on chain (chained-tx /
-  future-input scenarios). Missing or empty is skipped silently. Each
-  entry must be a `[txin, txout]` pair of objects; the JSON-encoded
-  field is capped at 32 KiB and at most 400 entries — malformed or
-  oversized input fails locally instead of burning a Koios round-trip.
+  on the `evaluateTransaction` call, so callers can splice in UTxOs
+  that don't yet exist on chain (chained-tx / future-input scenarios).
+  Missing or empty is skipped silently. Each entry may be either a
+  `[txin, txout]` pair of objects (the prose-docs shape) or a flat
+  Ogmios v6 `Utxo` object (the JSON-RPC schema shape — what callers
+  learn from Koios directly); both are accepted in the same request and
+  normalized internally to the flat shape Ogmios actually expects on
+  the wire. The JSON-encoded field is capped at 32 KiB and at most 400
+  entries — malformed or oversized input fails locally instead of
+  burning a Koios round-trip.
 - **`tx_hash` and `duration_ms` on the success log line.** JSON
   formatter surfaces them as top-level fields; text formatter embeds
   them in the message. Operators can now grep "did we sign tx X" by
