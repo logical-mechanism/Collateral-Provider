@@ -41,9 +41,15 @@ def evaluate_transaction(
     ``additional_utxos`` (Ogmios's ``additionalUtxo``) lets the caller
     splice extra ``[txin, txout]`` pairs into the chain state Ogmios uses
     to evaluate scripts — useful for transactions that depend on UTxOs
-    created by an as-yet-unsubmitted prior tx. We forward it verbatim if
-    non-empty; the inner shape isn't mirrored or validated here, so a
-    malformed entry surfaces as a Koios-side rejection, not an outage.
+    created by an as-yet-unsubmitted prior tx. The public API takes
+    ``[txin, txout]`` pairs (matching the prose docs at
+    ogmios.dev/mini-protocols/local-tx-submission/#additional-utxo-set),
+    but Ogmios v6's JSON-RPC schema actually expects a flat ``Utxo``
+    object per entry — passing the tuple shape gets rejected with
+    ``"parsing TxIn failed, expected Object, but encountered Array"``.
+    We bridge that here by merging each pair into one object before
+    sending. Field-level shape inside the merged object isn't validated;
+    a malformed entry surfaces as a Koios-side rejection, not an outage.
 
     The endpoint URL is taken from
     ``settings.ENVIRONMENTS[<env>]['KOIOS_URL']`` so operators can
@@ -58,7 +64,11 @@ def evaluate_transaction(
     url = env_settings["KOIOS_URL"]
     params: dict = {"transaction": {"cbor": tx_body_cbor_hex}}
     if additional_utxos:
-        params["additionalUtxo"] = additional_utxos
+        # Merge each [txin, txout] pair into a single Utxo object — see
+        # docstring above. Input fields (transaction, index) and output
+        # fields (address, value, datum, datumHash, script) don't
+        # overlap in the v6 schema, so a plain merge is unambiguous.
+        params["additionalUtxo"] = [{**txin, **txout} for txin, txout in additional_utxos]
     payload = {
         "jsonrpc": "2.0",
         "method": "evaluateTransaction",

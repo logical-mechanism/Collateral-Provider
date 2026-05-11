@@ -73,17 +73,39 @@ class TestEvaluateTransaction(unittest.TestCase):
         self.assertNotIn("additionalUtxo", sent_json["params"])
 
     @patch("api.simulate.requests.post")
-    def test_additional_utxos_forwarded_as_additionalUtxo(self, mock_post):
+    def test_additional_utxos_flattened_into_v6_utxo_objects(self, mock_post):
+        # Public API takes [txin, txout] pairs (per the prose docs) but
+        # Ogmios v6's JSON-RPC schema rejects array-shaped entries with
+        # "parsing TxIn failed, expected Object, but encountered Array".
+        # simulate.py merges the pair into one flat Utxo object before
+        # forwarding so the call actually reaches script evaluation.
         mock_post.return_value = _mock_response(200, {"result": []})
-        extra = [
-            [
-                {"transaction": {"id": "ab" * 32}, "index": 0},
-                {"address": "addr_test1...", "value": {"ada": {"lovelace": 1_000_000}}},
-            ]
-        ]
-        evaluate_transaction("cafebabe", "preprod", additional_utxos=extra)
+        txin = {"transaction": {"id": "ab" * 32}, "index": 0}
+        txout = {"address": "addr_test1...", "value": {"ada": {"lovelace": 1_000_000}}}
+        evaluate_transaction("cafebabe", "preprod", additional_utxos=[[txin, txout]])
         params = mock_post.call_args.kwargs["json"]["params"]
-        self.assertEqual(params["additionalUtxo"], extra)
+        self.assertEqual(params["additionalUtxo"], [{**txin, **txout}])
+
+    @patch("api.simulate.requests.post")
+    def test_additional_utxos_flattening_preserves_optional_output_fields(self, mock_post):
+        # datum/datumHash/script live on the output side of the pair and
+        # must survive the merge so script evaluation sees them.
+        mock_post.return_value = _mock_response(200, {"result": []})
+        txin = {"transaction": {"id": "cd" * 32}, "index": 3}
+        txout = {
+            "address": "addr_test1...",
+            "value": {"ada": {"lovelace": 2_000_000}},
+            "datumHash": "ef" * 32,
+            "script": {"language": "plutus:v3", "cbor": "deadbeef"},
+        }
+        evaluate_transaction("cafebabe", "preprod", additional_utxos=[[txin, txout]])
+        sent = mock_post.call_args.kwargs["json"]["params"]["additionalUtxo"]
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["transaction"], txin["transaction"])
+        self.assertEqual(sent[0]["index"], txin["index"])
+        self.assertEqual(sent[0]["address"], txout["address"])
+        self.assertEqual(sent[0]["datumHash"], txout["datumHash"])
+        self.assertEqual(sent[0]["script"], txout["script"])
 
     @patch("api.simulate.requests.post")
     def test_empty_additional_utxos_omitted_from_payload(self, mock_post):
