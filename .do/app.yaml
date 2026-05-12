@@ -34,10 +34,11 @@ services:
     # signatures, 16 KiB max payload), so basic-xxs is enough — bump
     # only if /metrics shows actual saturation.
     instance_size_slug: basic-xxs
-    # Two instances so health-check replacements and deploys don't drop
-    # in-flight requests onto a single recycling container. With one
-    # instance, any health-flap window surfaces to the user as 504s.
-    instance_count: 2
+    # basic-xxs is capped at instance_count: 1 by DO. To run two
+    # instances (so health-check replacements don't drop in-flight
+    # requests onto a single recycling container), move up to
+    # basic-xs / professional-xs.
+    instance_count: 1
 
     http_port: 8080
 
