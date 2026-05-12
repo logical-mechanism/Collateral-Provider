@@ -279,17 +279,17 @@ LOGGING = {
     },
     'loggers': {
         'django': {
-            'handlers': ['file'],
+            'handlers': ['file', 'console'],
             'level': 'INFO',
             'propagate': True,
         },
         'api': {
-            'handlers': ['file'],
+            'handlers': ['file', 'console'],
             'level': LOG_LEVEL,
             'propagate': False,
         },
         'django.security.DisallowedHost': {
-            'handlers': ['file'],
+            'handlers': ['file', 'console'],
             'level': 'WARNING',
             'propagate': False,
         },
