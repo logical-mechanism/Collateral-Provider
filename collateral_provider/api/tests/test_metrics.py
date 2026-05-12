@@ -120,7 +120,7 @@ class TestKoiosMetricsRecorded(TestCase):
     bump the right outcome label so an operator can tell timeout
     (probably-our-config) from http_error (probably-Koios-side) at a glance."""
 
-    @patch("api.simulate.requests.post")
+    @patch("api.simulate._session.post")
     def test_success_outcome(self, mock_post):
         from api.simulate import evaluate_transaction
 
@@ -131,7 +131,7 @@ class TestKoiosMetricsRecorded(TestCase):
         after = self._koios_outcome_value("preprod", "success")
         self.assertEqual(after - before, 1)
 
-    @patch("api.simulate.requests.post")
+    @patch("api.simulate._session.post")
     def test_tx_invalid_outcome(self, mock_post):
         from api.simulate import evaluate_transaction
 
@@ -142,7 +142,7 @@ class TestKoiosMetricsRecorded(TestCase):
         after = self._koios_outcome_value("preprod", "tx_invalid")
         self.assertEqual(after - before, 1)
 
-    @patch("api.simulate.requests.post")
+    @patch("api.simulate._session.post")
     def test_timeout_outcome(self, mock_post):
         import requests as _requests
 
