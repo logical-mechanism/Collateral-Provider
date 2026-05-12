@@ -34,20 +34,29 @@ services:
     # signatures, 16 KiB max payload), so basic-xxs is enough — bump
     # only if /metrics shows actual saturation.
     instance_size_slug: basic-xxs
-    instance_count: 1
+    # Two instances so health-check replacements and deploys don't drop
+    # in-flight requests onto a single recycling container. With one
+    # instance, any health-flap window surfaces to the user as 504s.
+    instance_count: 2
 
     http_port: 8080
 
     # /healthz is unthrottled, returns 503 if signing keys become
     # unreadable, and 200 otherwise. App Platform routes traffic to the
     # instance only once this returns 200.
+    # /healthz does synchronous file reads on the signing keys and the
+    # known_hosts registry. Under transient I/O slowness or while a
+    # worker is mid-Koios-call, a 3s probe timeout is easy to miss and
+    # produces spurious instance replacements (which themselves cause
+    # 504s during the swap window). Loosen both the timeout and the
+    # failure threshold so we only act on sustained unhealthiness.
     health_check:
       http_path: /healthz
       initial_delay_seconds: 10
       period_seconds: 10
-      timeout_seconds: 3
+      timeout_seconds: 8
       success_threshold: 1
-      failure_threshold: 3
+      failure_threshold: 5
 
     # Per-environment routing: this service is at the apex domain. Add
     # a `domains:` block at the app level (below) for a custom domain.

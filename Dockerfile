@@ -92,10 +92,18 @@ ENTRYPOINT ["/app/docker-entrypoint.sh"]
 # plenty for a basic-xxs DO instance and uses negligible extra memory.
 # The file-based cache backend shares throttle counters across workers
 # on the same host. Bind to 8080 — the port DO App Platform expects.
+#
+# --keep-alive 75 holds the LB↔gunicorn TCP connection open between
+# requests (gunicorn defaults to 2s, which forces a fresh accept() on
+# every cold hit). --timeout 60 makes the worker timeout explicit so a
+# hung Koios call doesn't get silently killed at the 30s default.
 CMD ["gunicorn", "collateral_provider.wsgi:application", \
      "--bind", "0.0.0.0:8080", \
      "--worker-class", "gthread", \
      "--workers", "2", \
      "--threads", "8", \
+     "--timeout", "60", \
+     "--graceful-timeout", "30", \
+     "--keep-alive", "75", \
      "--access-logfile", "-", \
      "--error-logfile", "-"]

@@ -3,6 +3,8 @@ import time
 
 import requests
 from django.conf import settings
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from api.metrics import koios_request_duration_seconds, koios_requests_total
 
@@ -10,7 +12,22 @@ logger = logging.getLogger("api")
 
 # Connect quickly, fail quickly. Koios responds in well under a second on the
 # happy path; anything beyond a few seconds is the user waiting for a 502.
-DEFAULT_TIMEOUT = (3.0, 5.0)  # (connect, read)
+# Connect bumped from 3s to 5s to absorb the occasional slow TLS handshake
+# on a path the pooled Session below hasn't reached in a while.
+DEFAULT_TIMEOUT = (5.0, 5.0)  # (connect, read)
+
+# Module-level Session so TCP + TLS state is reused across requests. Without
+# this, each call does a fresh handshake — fine warm, but after an idle stretch
+# the first request pays the full setup cost, which is the dominant cause of
+# cold-hit latency spikes that surface as 504s at the platform LB.
+_session = requests.Session()
+_adapter = HTTPAdapter(
+    pool_connections=4,
+    pool_maxsize=16,
+    max_retries=Retry(total=0),
+)
+_session.mount("https://", _adapter)
+_session.mount("http://", _adapter)
 
 
 class UpstreamUnavailable(Exception):
@@ -90,7 +107,7 @@ def evaluate_transaction(
 
     started = time.monotonic()
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        response = _session.post(url, headers=headers, json=payload, timeout=timeout)
     except requests.Timeout as exc:
         koios_request_duration_seconds.labels(environment=environment).observe(
             time.monotonic() - started
