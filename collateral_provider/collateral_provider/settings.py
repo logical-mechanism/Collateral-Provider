@@ -293,6 +293,14 @@ LOGGING = {
             'level': 'WARNING',
             'propagate': False,
         },
+        # Django's default django.request logger only routes to mail_admins
+        # and propagate=False, so unhandled 500s vanish when ADMINS is empty.
+        # Route it through our handlers so tracebacks reach stderr/the log.
+        'django.request': {
+            'handlers': ['file', 'console'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
     },
 }
 
