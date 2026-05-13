@@ -9,22 +9,22 @@
     },
     "public_key": ""
   },
-  "7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4": {
+  "1108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec8": {
     "preprod": {
       "utxo": {
-        "id": "1d388e615da2dca607e28f704130d04e39da6f251d551d66d054b75607e0393f",
+        "id": "ef18e00c412c06b74606c5e68901693c3974b2073dbec1dfd8b74f01af3102a1",
         "idx": 0
       },
       "url": "https://www.giveme.my/preprod/collateral/"
     },
     "mainnet": {
       "utxo": {
-        "id": "e62351eacbdd001aee77a91805840d2b81f77feebbf2439fb01b79e76c42c839",
+        "id": "1c2fbce4e3974f721b27226645c7a35d648698c77f62bc337b40bc2cd294e9cd",
         "idx": 0
       },
       "url": "https://www.giveme.my/mainnet/collateral/"
     },
-    "public_key": "fa2025e788fae01ce10deffff386f992f62a311758819e4e3792887396c171ba"
+    "public_key": "754c1db51aaee2e939b05b529ff5e210d8469afebcd2e487dae6f125fd500356"
   },
   "c59da4ec6e515c2efc8866274dee6ac9a64b5945efd365f3a999e760": {
     "testnet": {
