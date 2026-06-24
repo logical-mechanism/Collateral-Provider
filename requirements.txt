@@ -12,7 +12,7 @@ attrs==26.1.0
     # via
     #   jsonschema
     #   referencing
-cbor2==5.9.0
+cbor2==6.1.2
     # via -r requirements.in
 certifi==2026.4.22
     # via requests
@@ -20,7 +20,7 @@ cffi==2.0.0
     # via pynacl
 charset-normalizer==3.4.7
     # via requests
-django==5.2.14
+django==6.0.6
     # via
     #   -r requirements.in
     #   django-cors-headers
@@ -28,7 +28,7 @@ django==5.2.14
     #   drf-spectacular
 django-cors-headers==4.9.0
     # via -r requirements.in
-django-environ==0.13.0
+django-environ==0.14.0
     # via -r requirements.in
 djangorestframework==3.17.1
     # via
@@ -36,7 +36,7 @@ djangorestframework==3.17.1
     #   drf-spectacular
 drf-spectacular==0.29.0
     # via -r requirements.in
-gunicorn==23.0.0
+gunicorn==26.0.0
     # via -r requirements.in
 idna==3.13
     # via requests
@@ -60,7 +60,7 @@ referencing==0.37.0
     # via
     #   jsonschema
     #   jsonschema-specifications
-requests==2.33.1
+requests==2.34.2
     # via -r requirements.in
 rpds-py==0.30.0
     # via

@@ -5,6 +5,6 @@
 -r requirements.in
 
 pip-tools~=7.5
-ruff~=0.7
-coverage~=7.6
-locust~=2.32
+ruff~=0.15
+coverage~=7.14
+locust~=2.44
