@@ -68,6 +68,32 @@ def verify(vkey: str, signature: str, msg: str) -> bool:
         return False
 
 
+def validate_key_material(skey_path: str, vkey_path: str, pkh: str) -> None:
+    """Verify that the configured signing identity is internally consistent."""
+    skey = get_key_from_file(skey_path)
+    vkey = get_key_from_file(vkey_path)
+    try:
+        skey_bytes = bytes.fromhex(skey)
+        vkey_bytes = bytes.fromhex(vkey)
+        pkh_bytes = bytes.fromhex(pkh)
+    except ValueError as exc:
+        raise ValueError("signing identity contains non-hex data") from exc
+
+    if len(skey_bytes) != 32:
+        raise ValueError("signing key must contain exactly 32 bytes")
+    if len(vkey_bytes) != 32:
+        raise ValueError("verification key must contain exactly 32 bytes")
+    if len(pkh_bytes) != 28:
+        raise ValueError("PKH must contain exactly 28 bytes")
+
+    derived_vkey = bytes(SigningKey(skey_bytes).verify_key)
+    if derived_vkey != vkey_bytes:
+        raise ValueError("verification key does not match signing key")
+    derived_pkh = hashlib.blake2b(vkey_bytes, digest_size=28).digest()
+    if derived_pkh != pkh_bytes:
+        raise ValueError("PKH does not match verification key")
+
+
 def _consume_array_header(stream: BytesIO) -> None:
     """Advance ``stream`` past a CBOR array header (any length encoding).
 

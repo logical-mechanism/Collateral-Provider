@@ -57,7 +57,7 @@ free functions in cheap-to-expensive order; the first failure raises and short-c
 6. `validators.cbor.check_outputs` — every output address must not be in `banned_addresses`
 7. `validators.cbor.check_collateral` — collateral UTxO MUST be in `body[13]` (collateral inputs)
 8. `validators.cbor.check_signers` — our PKH MUST be in `body[14]` (required signers)
-9. `validators.transaction.check_valid_tx` — Koios `evaluateTransaction`; if no `result` key, reject
+9. `validators.transaction.check_valid_tx` — require a well-formed Koios/Ogmios JSON-RPC phase-2 evaluation result
 
 Only after all of that does [signature.witness_tx_cbor](collateral_provider/api/signature.py) compute the body hash (Blake2b-256, with `cbor2.CBORTag(258, ...)` reordering for inputs/certs/collateral/required-signers/reference-inputs/proposal-procedures) and produce the witness.
 
@@ -106,9 +106,9 @@ python3 manage.py test                  # runs the api app's tests
 - **DB is `:memory:`.** [settings.py](collateral_provider/collateral_provider/settings.py) hardcodes sqlite in-memory. There are no migrations or models in this app — Django's ORM is effectively unused. If you ever see a stray `db.sqlite3` it's from `manage.py` commands defaulting to file-based; it's gitignored.
 - **No native CSRF/auth.** It's an open POST API. Throttling is the only abuse control: `ProvideCollateralThrottle` (default `60/min` per IP, env-overridable via `COLLATERAL_THROTTLE_RATE`).
 - **Koios is the only upstream.** [simulate.py](collateral_provider/api/simulate.py) reads the URL from `settings.ENVIRONMENTS[<env>]['KOIOS_URL']` (defaults to `https://{preprod|api}.koios.rest/api/v1/ogmios`, overridable per network). Has a `(3s, 5s)` connect/read timeout. On any timeout/network/non-2xx/non-JSON failure it raises `UpstreamUnavailable`, which becomes a 503 to the user — distinct from a 400 "Transaction Fails Validation" (which means Koios actually said the tx was bad).
-- **Signing is PyNaCl Ed25519, not cardano-cli.** Keys in `api/key/payment.{skey,vkey}` are Cardano CLI JSON (`{"cborHex": "..."}`); `get_key_from_file` strips the first 4 hex chars (CBOR tag) before signing, and is `lru_cache`d so the file is read once per process. Production deploys override `SKEY_PATH`/`VKEY_PATH` to point outside the checkout.
+- **Signing is PyNaCl Ed25519, not cardano-cli.** Keys in `api/key/payment.{skey,vkey}` are Cardano CLI JSON (`{"cborHex": "..."}`); `get_key_from_file` strips the first 4 hex chars and caches by path + mtime. Startup verifies the skey, vkey, and PKH are one identity.
 - **Startup validation:** [api/apps.py](collateral_provider/api/apps.py) `ApiConfig.ready()` validates the keys at process start (skipped for `collectstatic` / `makemigrations` / `test`). A misconfigured deploy fails in the logs rather than 500ing on the first POST.
-- **Tx-hash construction is hand-rolled.** [signature.tx_id](collateral_provider/api/signature.py) re-canonicalizes specific set-typed fields with `cbor2.CBORTag(258, sorted(...))` before hashing. The set of fields is `_SET_BODY_FIELDS` driven by [tx_fields.py](collateral_provider/api/tx_fields.py); if a new Conway-era set field appears, add the constant + index there.
+- **Tx hashing preserves wire bytes.** [signature.tx_id](collateral_provider/api/signature.py) hashes the exact body-byte slice from the submitted transaction. Never re-serialize first: valid CBOR encoding choices affect the transaction ID.
 - **HTTPS is the proxy's job.** No `SECURE_SSL_REDIRECT` / `SECURE_HSTS_SECONDS` settings — production is expected behind a TLS-terminating proxy that handles HSTS and HTTP→HTTPS redirects. We set `SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')` so `request.is_secure()` works behind the proxy.
 - **`banned_addresses` matches on raw output bytes hex** (full address bytes), not bech32. When adding a ban, hex-encode the binary address.
 - **Logging writes to `LOG_FILE`** (default `./debug.log`) with rotation (1 MiB × 3). Gitignored. Every line includes the request id, e.g. `INFO 2026-... [a1b2c3d4e5f6] views Witnessed tx: ip=...`. Outside requests the id is `-`.

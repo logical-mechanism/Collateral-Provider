@@ -10,6 +10,7 @@ from api.signature import (
     get_key_from_file,
     sign,
     tx_id,
+    validate_key_material,
     verify,
 )
 from api.tests.test_data import (
@@ -90,6 +91,33 @@ class GetKeyFromFileTestCase(TestCase):
     def setUp(self):
         _clear_key_cache()
 
+    def _key_files(self, skey_hex, vkey_hex):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".skey", delete=False) as skey:
+            skey.write('{"cborHex":"5820' + skey_hex + '"}')
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".vkey", delete=False) as vkey:
+            vkey.write('{"cborHex":"5820' + vkey_hex + '"}')
+        self.addCleanup(os.unlink, skey.name)
+        self.addCleanup(os.unlink, vkey.name)
+        return skey.name, vkey.name
+
+    def test_validates_consistent_signing_identity(self):
+        skey = "00" * 32
+        vkey = "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
+        pkh = "cb9358529df4729c3246a2a033cb9821abbfd16de4888005904abc41"
+        paths = self._key_files(skey, vkey)
+        validate_key_material(*paths, pkh)
+
+    def test_rejects_vkey_that_does_not_match_skey(self):
+        paths = self._key_files("00" * 32, "00" * 32)
+        with self.assertRaisesRegex(ValueError, "does not match signing key"):
+            validate_key_material(*paths, "00" * 28)
+
+    def test_rejects_pkh_that_does_not_match_vkey(self):
+        vkey = "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
+        paths = self._key_files("00" * 32, vkey)
+        with self.assertRaisesRegex(ValueError, "PKH does not match"):
+            validate_key_material(*paths, "00" * 28)
+
     def test_strips_cbor_tag_prefix(self):
         # 5820 is the CBOR tag for "byte string of length 32" — the leading 4
         # hex chars in the cborHex value. The rest is the raw key material.
@@ -148,4 +176,3 @@ class GetKeyFromFileTestCase(TestCase):
             self.assertNotEqual(first, second)
         finally:
             os.unlink(path)
-

@@ -30,11 +30,12 @@ Validation pipeline (cheap to expensive — first failure short-circuits the res
 5. No output addresses are on the manual ban list
 6. Collateral UTxO **is** in `body[13]` (collateral inputs)
 7. Provider PKH **is** in `body[14]` (required signers)
-8. Koios `evaluateTransaction` accepts the tx (HTTP, with timeout + 503 on upstream failure)
+8. Koios/Ogmios successfully evaluates its Plutus redeemers (phase-2 script
+   evaluation, with timeout + 503 on upstream failure)
 
-If all eight pass, the body is canonicalized (set fields sorted and re-tagged
-258), Blake2b-256 hashed, signed Ed25519 with the on-disk skey via PyNaCl, and
-the witness CBOR `[0, [pubkey, signature]]` is returned hex-encoded.
+If all eight pass, the exact body-byte slice from the submitted transaction is
+Blake2b-256 hashed, signed Ed25519 with the on-disk skey via PyNaCl, and the
+witness CBOR `[0, [pubkey, signature]]` is returned hex-encoded.
 
 No full node, no Cardano CLI, no Blockfrost API key. Validation is delegated
 to a public Koios endpoint per environment.
@@ -112,9 +113,9 @@ pip-compile --upgrade --strip-extras requirements.in
 pip-compile --upgrade --strip-extras requirements-dev.in
 ```
 
-The signing keys are read once at process start and validated via
-`api.apps.ApiConfig.ready` — a misconfigured deploy fails fast in the logs
-instead of returning 500s on the first request.
+The signing identity is validated via `api.apps.ApiConfig.ready`: the signing
+key must derive the configured verification key, which must derive the
+configured PKH. Collateral TXIDs and indices are validated too.
 
 ## Testing
 

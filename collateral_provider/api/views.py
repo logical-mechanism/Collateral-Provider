@@ -117,6 +117,19 @@ class ProvideCollateralThrottle(throttling.AnonRateThrottle):
     # bad actor can't exhaust an upstream rate limit on their own.
     rate = settings.COLLATERAL_THROTTLE_RATE
 
+    def get_ident(self, request) -> str | None:
+        """Use the same trusted-proxy-aware identity as bans and logs.
+
+        DRF's default implementation consumes ``X-Forwarded-For`` according
+        to its global ``NUM_PROXIES`` setting.  That is a separate trust model
+        from this service's ``TRUSTED_PROXY_IPS`` allowlist and, with DRF's
+        defaults, lets a directly-connected client forge a new throttle key
+        merely by changing the header.  Keeping this override next to
+        ``_client_ip`` makes the security boundary explicit and ensures bans,
+        logging, and throttling agree about who made the request.
+        """
+        return _client_ip(request)
+
 
 @extend_schema_view(
     post=extend_schema(

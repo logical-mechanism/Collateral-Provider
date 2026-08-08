@@ -23,14 +23,34 @@ class ApiConfig(AppConfig):
 
         Without this, a bad deploy would only surface on the first POST
         request, returning a 500 to the user. Better to refuse to start."""
-        from api.signature import get_key_from_file
+        from api.signature import validate_key_material
 
         for path in (settings.SKEY_PATH, settings.VKEY_PATH):
             if not os.path.exists(path):
                 logger.critical(f"Signing key missing: {path}")
                 raise RuntimeError(f"Required signing key not found at {path}")
-            try:
-                get_key_from_file(path)
-            except (OSError, KeyError, ValueError, TypeError) as exc:
-                logger.critical(f"Signing key unreadable at {path}: {exc}")
-                raise RuntimeError(f"Could not parse signing key at {path}") from exc
+        try:
+            validate_key_material(settings.SKEY_PATH, settings.VKEY_PATH, settings.PKH)
+        except (OSError, KeyError, ValueError, TypeError) as exc:
+            logger.critical("Signing identity is invalid: %s", exc)
+            raise RuntimeError("Signing key, verification key, and PKH do not match") from exc
+
+        # Local operators commonly configure preprod first and leave mainnet
+        # blank while developing. Production advertises both routes, so every
+        # configured network must be usable there.
+        if settings.ENVIRONMENT != "development":
+            for environment, config in settings.ENVIRONMENTS.items():
+                try:
+                    txid = bytes.fromhex(config["TXID"])
+                    txidx = config["TXIDX"]
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        f"Invalid collateral configuration for {environment}"
+                    ) from exc
+                if (
+                    len(txid) != 32
+                    or not isinstance(txidx, int)
+                    or isinstance(txidx, bool)
+                    or txidx < 0
+                ):
+                    raise RuntimeError(f"Invalid collateral configuration for {environment}")

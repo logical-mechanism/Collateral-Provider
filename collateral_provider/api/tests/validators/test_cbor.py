@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+import cbor2
 from rest_framework.exceptions import ValidationError
 
 from api.tests.test_big_data import invalid_tx_body_too_big
@@ -15,6 +16,21 @@ from api.validators.cbor import (
 
 
 class TestCborValidator(unittest.TestCase):
+    def test_rejects_trailing_data(self):
+        with self.assertRaises(ValidationError) as context:
+            check_tx_body(cbor2.dumps([{}, {}, True, None]) + b"\x00")
+        self.assertIn("Trailing Data After Tx", str(context.exception.detail))
+
+    def test_requires_exact_four_element_envelope(self):
+        with self.assertRaises(ValidationError) as context:
+            check_tx_body(cbor2.dumps([{}, {}, True]))
+        self.assertIn("Tx Must Have Four Elements", str(context.exception.detail))
+
+    def test_requires_witness_set_map(self):
+        with self.assertRaises(ValidationError) as context:
+            check_tx_body(cbor2.dumps([{}, [], True, None]))
+        self.assertIn("Witness Set Is Not A Dict", str(context.exception.detail))
+
     def test_empty_cbor_hex(self):
         with self.assertRaises(ValidationError) as context:
             check_cbor_hex("")
@@ -50,7 +66,7 @@ class TestCborValidator(unittest.TestCase):
         tx_bytes = check_cbor_hex(cbor_hex)
         with self.assertRaises(ValidationError) as context:
             check_tx_body(tx_bytes)
-        self.assertIn("Boolean Does Not Exist In Tx", str(context.exception.detail))
+        self.assertIn("Tx Must Have Four Elements", str(context.exception.detail))
 
     def test_not_a_bool(self):
         # is_valid slot is the integer 0 instead of true/false.

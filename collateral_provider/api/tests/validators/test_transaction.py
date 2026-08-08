@@ -46,6 +46,21 @@ class TestTransactionValidator(unittest.TestCase):
         self.assertIn("Transaction Fails Validation", str(context.exception.detail))
 
     @patch("api.validators.transaction.evaluate_transaction")
+    def test_malformed_success_response_is_upstream_failure(self, mock_eval):
+        for response in (
+            None,
+            [],
+            {"result": []},
+            {"jsonrpc": "2.0", "result": None},
+            {"jsonrpc": "2.0", "result": [], "error": {}},
+            {"jsonrpc": "2.0", "method": "submitTransaction", "result": []},
+        ):
+            with self.subTest(response=response):
+                mock_eval.return_value = response
+                with self.assertRaises(UpstreamServiceUnavailable):
+                    check_valid_tx("deadbeef", "preprod")
+
+    @patch("api.validators.transaction.evaluate_transaction")
     def test_upstream_failure_translates_to_503(self, mock_eval):
         # Koios was unreachable / timed out / returned junk. We must NOT
         # surface that as a 400 — the user's tx might be perfectly valid.

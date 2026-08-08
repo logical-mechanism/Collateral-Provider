@@ -63,6 +63,15 @@ HTTP contract:
 
 ### Changed
 
+- The collateral throttle now uses the same trusted-proxy-aware client
+  identity as bans and logging, preventing forged `X-Forwarded-For` values
+  from creating fresh rate-limit buckets.
+- Startup now verifies the signing key, verification key, PKH, collateral
+  transaction IDs, and indices are internally consistent.
+- Transaction and Koios envelopes fail closed: exactly four transaction
+  elements, no trailing CBOR, a map-shaped witness set, and a JSON-RPC 2.0
+  evaluation-result list are required before signing.
+
 - **JSON-only request bodies on `/<env>/collateral/`.** DRF's default
   also accepted form-encoded and multipart, which was undocumented
   surface area. Non-JSON content types now return 415.

@@ -172,9 +172,53 @@ class TestThrottle(TestCase):
         response = self.client.post(self.url, {"tx": "deadbeef"}, format="json")
         self.assertEqual(response.status_code, 429)
 
+    @patch("api.views.ProvideCollateralThrottle.rate", "2/min")
+    @override_settings(TRUSTED_PROXY_IPS=["127.0.0.1"])
+    def test_untrusted_peer_cannot_rotate_xff_to_evade_limit(self):
+        for forged_ip in ("1.1.1.1", "2.2.2.2"):
+            response = self.client.post(
+                self.url,
+                {"tx": "deadbeef"},
+                format="json",
+                REMOTE_ADDR="9.9.9.9",
+                HTTP_X_FORWARDED_FOR=forged_ip,
+            )
+            self.assertNotEqual(response.status_code, 429)
+
+        response = self.client.post(
+            self.url,
+            {"tx": "deadbeef"},
+            format="json",
+            REMOTE_ADDR="9.9.9.9",
+            HTTP_X_FORWARDED_FOR="3.3.3.3",
+        )
+        self.assertEqual(response.status_code, 429)
+
+    @patch("api.views.ProvideCollateralThrottle.rate", "1/min")
+    @override_settings(TRUSTED_PROXY_IPS=["10.0.0.0/8"])
+    def test_trusted_proxy_clients_have_separate_limit_buckets(self):
+        for client_ip in ("1.1.1.1", "2.2.2.2"):
+            response = self.client.post(
+                self.url,
+                {"tx": "deadbeef"},
+                format="json",
+                REMOTE_ADDR="10.42.7.99",
+                HTTP_X_FORWARDED_FOR=client_ip,
+            )
+            self.assertNotEqual(response.status_code, 429)
+
+        response = self.client.post(
+            self.url,
+            {"tx": "deadbeef"},
+            format="json",
+            REMOTE_ADDR="10.42.7.99",
+            HTTP_X_FORWARDED_FOR="1.1.1.1",
+        )
+        self.assertEqual(response.status_code, 429)
+
 
 class TestClientIp(TestCase):
-    """_client_ip is what we throttle and log on, so its parsing has to be
+    """_client_ip is what we throttle, ban, and log on, so its parsing has to be
     correct under whatever X-Forwarded-For headers a reverse proxy sends.
     Trust is scoped to settings.TRUSTED_PROXY_IPS so an attacker connecting
     to gunicorn directly can't forge their way past the throttle."""

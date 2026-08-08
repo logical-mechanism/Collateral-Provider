@@ -1,3 +1,5 @@
+from io import BytesIO
+
 import cbor2
 from django.conf import settings
 
@@ -33,28 +35,31 @@ def check_tx_body(tx_bytes: bytes) -> dict:
     (an explicit False would direct the chain to consume the collateral —
     we refuse to sign such transactions), and that the body slot is a map.
     """
+    stream = BytesIO(tx_bytes)
     try:
-        tx = cbor2.loads(tx_bytes)
+        tx = cbor2.CBORDecoder(stream).decode()
     except cbor2.CBORDecodeError:
         raise_validation_error("Invalid CBOR Data In Tx")
     if not isinstance(tx, list):
         raise_validation_error("Tx Is Not A List")
+    if stream.read(1):
+        raise_validation_error("Trailing Data After Tx")
+    if len(tx) != 4:
+        raise_validation_error("Tx Must Have Four Elements")
 
-    try:
-        is_valid = tx[TX_IS_VALID]
-    except IndexError:
-        raise_validation_error("Boolean Does Not Exist In Tx")
+    body = tx[TX_BODY]
+    if not isinstance(body, dict):
+        raise_validation_error("Tx Body Is Not A Dict")
+
+    if not isinstance(tx[1], dict):
+        raise_validation_error("Witness Set Is Not A Dict")
+
+    is_valid = tx[TX_IS_VALID]
     if not isinstance(is_valid, bool):
         raise_validation_error("Boolean Is Not A Bool")
     if is_valid is False:
         raise_validation_error("Boolean Can't Be False")
 
-    try:
-        body = tx[TX_BODY]
-    except IndexError:
-        raise_validation_error("Body Does Not Exist In Tx")
-    if not isinstance(body, dict):
-        raise_validation_error("Tx Body Is Not A Dict")
     return body
 
 

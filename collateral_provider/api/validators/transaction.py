@@ -34,5 +34,14 @@ def check_valid_tx(
     except UpstreamUnavailable as exc:
         logger.error(f"Upstream Evaluation Unavailable: {exc}")
         raise UpstreamServiceUnavailable() from exc
-    if "result" not in response:
+    if isinstance(response, dict) and "error" in response and "result" not in response:
         raise_validation_error("Transaction Fails Validation")
+    if not (
+        isinstance(response, dict)
+        and response.get("jsonrpc") == "2.0"
+        and isinstance(response.get("result"), list)
+        and "error" not in response
+        and response.get("method", "evaluateTransaction") == "evaluateTransaction"
+    ):
+        logger.error("Malformed Upstream Evaluation Response")
+        raise UpstreamServiceUnavailable()
