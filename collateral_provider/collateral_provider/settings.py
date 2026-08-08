@@ -6,6 +6,7 @@ import environ
 # Single source of truth for the service version. /healthz reports it, the
 # OpenAPI schema reports it. Bump on any externally-visible change.
 from api import __version__ as API_VERSION
+from api.log_format import build_logging_config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -31,22 +32,28 @@ VKEY_PATH = env('VKEY_PATH', default=str(BASE_DIR / 'api' / 'key' / 'payment.vke
 SECRET_KEY = env('DJANGO_SECRET_KEY')
 ENVIRONMENT = env('ENVIRONMENT')
 
-# Per-network configuration. KOIOS_URL is the JSON-RPC ogmios endpoint we
-# POST evaluateTransaction to. Defaults match Koios's public hosting for
-# preprod/mainnet; override for self-hosted Koios or alternate networks
-# (preview, sanchonet, ...).
+# Per-network configuration. KOIOS_URL is the JSON-RPC Ogmios endpoint used
+# for protocol-parameter lookup and evaluateTransaction. Defaults match Koios's
+# public hosting for preprod/mainnet; override for a self-hosted evaluator or
+# alternate networks (preview, sanchonet, ...).
 ENVIRONMENTS = {
     'preprod': {
         'NETWORK': env('PREPROD_NETWORK'),
         'TXID': env('PREPROD_TXID'),
         'TXIDX': env.int('PREPROD_TXIDX'),
-        'KOIOS_URL': env('PREPROD_KOIOS_URL', default='https://preprod.koios.rest/api/v1/ogmios'),
+        'KOIOS_URL': env(
+            'PREPROD_KOIOS_URL',
+            default='https://preprod.koios.rest/api/v1/ogmios',
+        ),
     },
     'mainnet': {
         'NETWORK': env('MAINNET_NETWORK'),
         'TXID': env('MAINNET_TXID'),
         'TXIDX': env.int('MAINNET_TXIDX'),
-        'KOIOS_URL': env('MAINNET_KOIOS_URL', default='https://api.koios.rest/api/v1/ogmios'),
+        'KOIOS_URL': env(
+            'MAINNET_KOIOS_URL',
+            default='https://api.koios.rest/api/v1/ogmios',
+        ),
     },
 }
 
@@ -71,6 +78,14 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 # Collateral endpoint throttle (per anonymous IP).
 COLLATERAL_THROTTLE_RATE = env('COLLATERAL_THROTTLE_RATE', default='60/min')
 
+# Per-process admission budget for outbound Koios calls. Gunicorn runs two
+# processes, so the default bounds aggregate in-flight upstream calls to about
+# eight while leaving worker threads available for health checks and fast
+# rejections during an upstream slowdown.
+KOIOS_MAX_IN_FLIGHT = env.int('KOIOS_MAX_IN_FLIGHT', default=4)
+if KOIOS_MAX_IN_FLIGHT < 1:
+    raise RuntimeError("KOIOS_MAX_IN_FLIGHT must be at least 1")
+
 # X-Forwarded-For is only trusted when the immediate connection (i.e. the
 # REMOTE_ADDR Django sees) is one of these IPs. Defaults to localhost,
 # which is right when nginx/Caddy lives on the same host. Multi-host
@@ -78,10 +93,10 @@ COLLATERAL_THROTTLE_RATE = env('COLLATERAL_THROTTLE_RATE', default='60/min')
 # An empty list disables XFF trust entirely.
 TRUSTED_PROXY_IPS = env.list('TRUSTED_PROXY_IPS', default=['127.0.0.1', '::1'])
 
-# Operator-curated data files. The service reads them on every request
-# but only re-parses when the file's mtime advances. Default locations
-# put them next to the project (gitignored) so editing + atomic-rename
-# is the operator workflow.
+# Operator-curated data files. The service stats them on every request and
+# re-parses when (mtime_ns, size, inode) changes. Default locations put them
+# next to the project (gitignored) so editing + atomic-rename is the operator
+# workflow.
 BANS_PATH = env('BANS_PATH', default=str(BASE_DIR / 'bans.json'))
 KNOWN_HOSTS_PATH = env(
     'KNOWN_HOSTS_PATH',
@@ -110,6 +125,7 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # must precede CommonMiddleware
     'api.middleware.RequestIDMiddleware',     # stamp X-Request-ID before anything logs
     'api.middleware.MetricsMiddleware',       # measure /collateral request count + duration
+    'api.middleware.RequestBodyLimitMiddleware',  # cap bytes before DRF parses JSON
     'django.middleware.security.SecurityMiddleware',
     # Whitenoise serves the collected static files directly from gunicorn.
     # Required because containerized deploys (DO App Platform, etc.) don't
@@ -194,20 +210,16 @@ REST_FRAMEWORK = {
     ],
 }
 
-# Protocol-adjacent caps. ``MAX_TX_SIZE`` matches the on-chain Conway
-# protocol parameter (16 KiB binary); ``ADDITIONAL_UTXOS_MAX_BYTES``
-# caps the JSON-encoded `additional_utxos` field so a malformed payload
-# can't burn a Koios round-trip. Both are env-overridable so a future
-# hard-fork that bumps the protocol parameter doesn't require a code
-# redeploy. The HTTP body cap is derived from them — there's no point
-# accepting a body larger than the largest possible legitimate one.
+# Protocol-adjacent cap. ``MAX_TX_SIZE`` matches the on-chain Conway protocol
+# parameter (16 KiB binary) and is env-overridable so a future hard fork does
+# not require a code deploy. The HTTP body cap allows the hex encoding plus a
+# small JSON envelope; caller-supplied UTxOs are intentionally unsupported.
 MAX_TX_SIZE = env.int('MAX_TX_SIZE', default=16 * 1024)
-ADDITIONAL_UTXOS_MAX_BYTES = env.int('ADDITIONAL_UTXOS_MAX_BYTES', default=32 * 1024)
 
-# Body = hex tx (2x binary) + additional_utxos JSON + 4 KiB of envelope
-# (field names, JSON quoting, throttling slack). Django rejects anything
-# larger before the view sees it, so junk can't burn worker CPU.
-DATA_UPLOAD_MAX_MEMORY_SIZE = (MAX_TX_SIZE * 2) + ADDITIONAL_UTXOS_MAX_BYTES + 4 * 1024
+# Body = hex tx (2x binary) + 4 KiB for field names, JSON quoting, and slack.
+# ``RequestBodyLimitMiddleware`` rejects anything larger before DRF parses JSON
+# or the view runs, so junk cannot burn serializer/CBOR CPU.
+DATA_UPLOAD_MAX_MEMORY_SIZE = (MAX_TX_SIZE * 2) + 4 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = DATA_UPLOAD_MAX_MEMORY_SIZE
 
 SPECTACULAR_SETTINGS = {
@@ -216,7 +228,8 @@ SPECTACULAR_SETTINGS = {
         'Submit a Cardano transaction CBOR. If the transaction satisfies the '
         'collateral-usage contract (uses this provider\'s collateral UTxO, '
         'requires this provider\'s PKH as a signer, does not spend the '
-        'collateral, has is_valid=true, and would succeed on-chain), the '
+        'collateral, has is_valid=true, binds the submitted script data and '
+        'execution budgets, and passes phase-2 script evaluation), the '
         'service returns a vkey witness CBOR you can attach to the witness set.'
     ),
     'VERSION': API_VERSION,
@@ -226,83 +239,26 @@ SPECTACULAR_SETTINGS = {
 
 CORS_ALLOW_ALL_ORIGINS = True
 
-# Logging. LOG_LEVEL controls the api logger; LOG_FILE is where we write
-# (rotated at 1 MiB x 3 backups). LOG_FORMAT picks plain text (default) or
-# JSON-per-line (for log-aggregator ingest). Defaults preserve existing
-# behavior so existing logrotate / monitoring keep working.
+# Logging. File output remains the default (rotated at 1 MiB x 3 backups).
+# LOG_TO_CONSOLE switches exclusively to stderr for systemd/journald and
+# container runtimes; the file handler is not instantiated in that mode.
+# LOG_FORMAT picks plain text (default) or JSON-per-line.
 LOG_LEVEL = env('LOG_LEVEL', default='DEBUG')
 LOG_FILE = env('LOG_FILE', default=str(BASE_DIR / 'debug.log'))
 LOG_FORMAT = env('LOG_FORMAT', default='text')  # 'text' or 'json'
+LOG_TO_CONSOLE = env.bool('LOG_TO_CONSOLE', default=False)
 if LOG_FORMAT not in ('text', 'json'):
     raise RuntimeError(f"LOG_FORMAT must be 'text' or 'json', got {LOG_FORMAT!r}")
 
 # Every record gets a request_id field via the RequestIDLogFilter, which
 # reads from a contextvar set by RequestIDMiddleware. Outside a request
 # (startup, management commands) the id is "-".
-LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'filters': {
-        'request_id': {
-            '()': 'api.middleware.RequestIDLogFilter',
-        },
-    },
-    'formatters': {
-        'verbose': {
-            'format': '{levelname} {asctime} [{request_id}] {module} {message}',
-            'style': '{',
-        },
-        'simple': {
-            'format': '{levelname} [{request_id}] {message}',
-            'style': '{',
-        },
-        'json': {
-            '()': 'api.log_format.JsonFormatter',
-        },
-    },
-    'handlers': {
-        'console': {
-            'level': 'DEBUG',
-            'class': 'logging.StreamHandler',
-            'formatter': 'json' if LOG_FORMAT == 'json' else 'simple',
-            'filters': ['request_id'],
-        },
-        'file': {
-            'level': LOG_LEVEL,
-            'class': 'logging.handlers.RotatingFileHandler',
-            'filename': LOG_FILE,
-            'formatter': 'json' if LOG_FORMAT == 'json' else 'verbose',
-            'filters': ['request_id'],
-            'maxBytes': 1024 * 1024 * 1,
-            'backupCount': 3,
-        },
-    },
-    'loggers': {
-        'django': {
-            'handlers': ['file'],
-            'level': 'INFO',
-            'propagate': True,
-        },
-        'api': {
-            'handlers': ['file'],
-            'level': LOG_LEVEL,
-            'propagate': False,
-        },
-        'django.security.DisallowedHost': {
-            'handlers': ['file'],
-            'level': 'WARNING',
-            'propagate': False,
-        },
-        # Django's default django.request logger only routes to mail_admins
-        # and propagate=False, so unhandled 500s vanish when ADMINS is empty.
-        # Route it through our handlers so tracebacks reach stderr/the log.
-        'django.request': {
-            'handlers': ['file', 'console'],
-            'level': 'ERROR',
-            'propagate': False,
-        },
-    },
-}
+LOGGING = build_logging_config(
+    log_level=LOG_LEVEL,
+    log_file=LOG_FILE,
+    log_format=LOG_FORMAT,
+    log_to_console=LOG_TO_CONSOLE,
+)
 
 # This is a stateless POST API — no sessions, no CSRF, no auth cookies.
 # TLS, HSTS, and HTTP->HTTPS redirects are all handled by the reverse proxy

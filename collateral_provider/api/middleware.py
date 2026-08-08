@@ -3,12 +3,23 @@ import re
 import time
 import uuid
 from contextvars import ContextVar
+from io import BytesIO
+
+from django.conf import settings
+from django.http import JsonResponse
 
 from api.metrics import http_request_duration_seconds, http_requests_total
 
 # Default "-" is what shows up in logs emitted outside any request (startup,
 # management commands, ad-hoc shell). Real request IDs are 12 hex chars.
 _request_id: ContextVar[str] = ContextVar("request_id", default="-")
+
+# Request IDs are reflected in a response header and appear in every log
+# record. Restrict client-supplied values to a conservative ASCII alphabet so
+# they cannot inject control characters or structured-log delimiters. This
+# still accepts UUIDs, W3C traceparent values, and the common ``service:id`` /
+# ``service.id`` forms.
+_SAFE_REQUEST_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*", re.ASCII)
 
 
 def get_request_id() -> str:
@@ -19,10 +30,10 @@ def get_request_id() -> str:
 class RequestIDMiddleware:
     """Tag every request with an X-Request-ID for log correlation.
 
-    If the client supplies X-Request-ID we honor it (so they can grep the
-    same id across our logs and theirs). Otherwise we mint one. The id is
-    stored in a contextvar so the logging filter can pick it up from any
-    code path the request touches.
+    If the client supplies a safe X-Request-ID we honor it (so they can grep
+    the same id across our logs and theirs). Otherwise we mint one. The id is
+    stored in a contextvar so the logging filter can pick it up from any code
+    path the request touches.
     """
 
     HEADER = "HTTP_X_REQUEST_ID"
@@ -34,9 +45,13 @@ class RequestIDMiddleware:
 
     def __call__(self, request):
         incoming = request.META.get(self.HEADER, "").strip()
-        # Cap incoming length so a malicious client can't pump our logs full
-        # of multi-kilobyte "request ids".
-        rid = incoming[: self.MAX_INCOMING_LEN] if incoming else uuid.uuid4().hex[:12]
+        # Never truncate an invalid/overlong value into something that might
+        # collide with a legitimate caller's ID. Mint a fresh local ID.
+        incoming_is_safe = (
+            len(incoming) <= self.MAX_INCOMING_LEN
+            and _SAFE_REQUEST_ID_RE.fullmatch(incoming) is not None
+        )
+        rid = incoming if incoming_is_safe else uuid.uuid4().hex[:12]
         token = _request_id.set(rid)
         try:
             response = self.get_response(request)
@@ -60,6 +75,45 @@ class RequestIDLogFilter(logging.Filter):
 _COLLATERAL_PATH_RE = re.compile(r"^/(?P<env>[^/]+)/collateral/?$")
 
 
+class RequestBodyLimitMiddleware:
+    """Enforce the collateral request cap before DRF parses JSON.
+
+    Django's ``DATA_UPLOAD_MAX_MEMORY_SIZE`` does not reliably stop streaming
+    parsers before the view, and a missing transfer ``Content-Length`` must not
+    turn that setting into a bypass. Read at most ``limit + 1`` bytes from the
+    WSGI stream, reject overflow, then replay the bounded bytes to DRF.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.method != "POST" or not _COLLATERAL_PATH_RE.match(request.path):
+            return self.get_response(request)
+
+        limit = settings.DATA_UPLOAD_MAX_MEMORY_SIZE
+        raw_length = request.META.get("CONTENT_LENGTH")
+        if raw_length:
+            try:
+                content_length = int(raw_length)
+            except (TypeError, ValueError):
+                return JsonResponse({"detail": "Invalid Content-Length"}, status=400)
+            if content_length < 0:
+                return JsonResponse({"detail": "Invalid Content-Length"}, status=400)
+            if content_length > limit:
+                return JsonResponse({"detail": "Request Body Too Large"}, status=413)
+
+        body = request.read(limit + 1)
+        if len(body) > limit:
+            return JsonResponse({"detail": "Request Body Too Large"}, status=413)
+
+        # ``request.read`` marks the original stream consumed. Preserve the
+        # bounded body and replace the stream so DRF sees the request normally.
+        request._body = body
+        request._stream = BytesIO(body)
+        return self.get_response(request)
+
+
 class MetricsMiddleware:
     """Count and time requests to the /<env>/collateral/ endpoint.
 
@@ -76,7 +130,12 @@ class MetricsMiddleware:
         if not match:
             return self.get_response(request)
 
-        env = match.group("env")
+        requested_env = match.group("env")
+        # Route values are attacker-controlled. Label only configured
+        # environments and coalesce every invalid value into one bounded
+        # series, otherwise /foo/collateral, /bar/collateral, ... grows the
+        # Prometheus registry without limit.
+        env = requested_env if requested_env in settings.ENVIRONMENTS else "unknown"
         started = time.monotonic()
         response = self.get_response(request)
         http_request_duration_seconds.labels(environment=env).observe(

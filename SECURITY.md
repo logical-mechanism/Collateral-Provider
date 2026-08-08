@@ -49,20 +49,45 @@ If you're running this service:
 
 - [ ] Keep `payment.skey` outside the repo on production hosts; configure
       `SKEY_PATH` via the `.env` file to point at it.
+- [ ] Use a dedicated payment key controlling exactly the advertised
+      collateral UTxO. Never receive ordinary funds at, or reuse the key hash
+      for, another payment address, stake credential, native policy, or
+      governance credential. The returned witness authorizes the whole body.
+- [ ] Treat the full advertised UTxO as operationally at risk unless callers
+      use CIP-40 collateral return to an address controlled by the provider
+      key. The API intentionally does not require `collateral_return` /
+      `total_collateral` so wallet builders can integrate without
+      provider-specific balancing rules.
+- [ ] Do not add a pass-through for Ogmios `additionalUtxo`. The service
+      rejects every non-empty caller-supplied UTxO set because a reference to
+      an unsubmitted parent cannot authenticate the output value/datum/script
+      the parent will actually create. Safe support requires verifying the
+      complete parent transaction or consulting an authoritative mempool.
+- [ ] Treat the configured Ogmios/Koios endpoint as a funds-at-risk trust
+      dependency. Local response correlation, script-data-hash verification,
+      and budget comparison do not stop an evaluator from lying that a
+      phase-2-failing script succeeded. For mainnet, self-host the evaluator
+      beside a node you control or use an independently trusted service.
 - [ ] Set `ALLOWED_HOSTS` to your real domain(s); the service refuses to
       start in non-development mode if it's empty.
 - [ ] Run gunicorn behind a TLS-terminating reverse proxy. The service trusts
       `X-Forwarded-Proto` from the proxy via `SECURE_PROXY_SSL_HEADER`.
-- [ ] Make sure the proxy strips/rewrites `X-Forwarded-For` so an external
-      client can't spoof their source IP and bypass the per-IP throttle.
-      As a code-level safeguard, the service only honors `X-Forwarded-For`
-      when the immediate peer (`REMOTE_ADDR`) is in `TRUSTED_PROXY_IPS`
-      (default: `127.0.0.1`, `::1`). Set this list to your real proxy
-      egress IPs (or CIDR blocks) in multi-host deploys.
+- [ ] Make sure the proxy replaces `X-Forwarded-For` or appends the actual
+      client address correctly, and prevent direct public access to gunicorn.
+      As a code-level safeguard, the service only honors the header when the
+      immediate peer (`REMOTE_ADDR`) is in `TRUSTED_PROXY_IPS`, then validates
+      and walks the chain right-to-left until it reaches the first untrusted
+      address. Set this list to actual proxy egress IPs or narrowly scoped
+      CIDRs—never arbitrary client networks.
 - [ ] Subscribe to the GitHub repository's Dependabot/security alerts.
 - [ ] Pin to a known-good commit (don't deploy from `main` without review).
 - [ ] Probe `/healthz` from your load balancer; it returns 503 if the keys
       become unreadable so traffic gets routed away from a broken host.
+- [ ] Protect operational logs. The application deliberately omits raw client
+      IPs from request records and transaction hashes from success records,
+      but reverse-proxy and gunicorn access logs may have their own policies.
+      Under systemd or a container runtime, configure journal/runtime retention
+      and access controls. In file mode, restrict `LOG_FILE` to the service user.
 
 ### Container-platform deploys (DigitalOcean App Platform, Fly, Render, ...)
 
@@ -74,8 +99,10 @@ hardening:
       `VKEY_CONTENTS` SECRET env vars (or a mounted volume). They must
       **never** be baked into the image — `.dockerignore` excludes
       `api/key/` for exactly this reason. The entrypoint writes them
-      to `/run/keys/` (tmpfs) and unsets the env vars before exec'ing
-      gunicorn.
+      to `/run/keys/` on the container's ephemeral writable layer and unsets
+      the env vars before exec'ing gunicorn. Mount `/run/keys` as tmpfs when
+      the platform supports it if disk-backed ephemeral storage is not
+      acceptable.
 - [ ] `DJANGO_SECRET_KEY` must be a real ≥50-char random string set as
       a SECRET env var; never reuse the dev or CI value in production.
 - [ ] `TRUSTED_PROXY_IPS` must list the platform's load-balancer source

@@ -10,9 +10,10 @@ from unittest.mock import patch
 
 from django.conf import settings
 from django.test import TestCase
+from nacl.exceptions import RuntimeError as NaClRuntimeError
 from rest_framework.exceptions import ValidationError
 
-from api.services.collateral import issue_witness
+from api.services.collateral import SigningServiceUnavailable, issue_witness
 
 from .test_big_data import invalid_tx_body_too_big
 from .test_data import (
@@ -23,6 +24,7 @@ from .test_data import (
     invalid_tx_body_missing_collateral,
     valid_tx_body_cbor_but_no_collateral,
 )
+from .test_views import build_happy_path_tx_cbor
 
 
 class IssueWitnessTestCase(TestCase):
@@ -70,6 +72,42 @@ class IssueWitnessTestCase(TestCase):
         # The "lying" fixture passes structural checks but Koios would
         # see through it. We simulate Koios returning an error verdict
         # and assert we surface it as a ValidationError.
-        mock_eval.return_value = {"jsonrpc": "2.0", "error": {"code": -32602}}
-        with self.assertRaises(ValidationError):
+        mock_eval.return_value = {
+            "jsonrpc": "2.0",
+            "method": "evaluateTransaction",
+            "error": {"code": -32602},
+        }
+        with (
+            patch(
+                "api.validators.transaction.get_protocol_cost_models",
+                return_value={2: (1,)},
+            ),
+            patch(
+                "api.validators.transaction.verify_script_data_hash",
+                return_value=True,
+            ),
+            self.assertRaises(ValidationError),
+        ):
             self._call(invalid_tx_body_cbor_is_lying())
+
+    @patch("api.services.collateral.check_valid_tx")
+    @patch(
+        "api.services.collateral.witness_tx_cbor",
+        side_effect=ValueError("rotating key mismatch"),
+    )
+    def test_signing_identity_race_fails_closed_with_503(self, _mock_sign, _mock_check):
+        with self.assertRaises(SigningServiceUnavailable) as context:
+            self._call(build_happy_path_tx_cbor())
+        self.assertEqual(context.exception.status_code, 503)
+
+    @patch("api.services.collateral.check_valid_tx")
+    @patch(
+        "api.services.collateral.witness_tx_cbor",
+        side_effect=NaClRuntimeError("libsodium signing failure"),
+    )
+    def test_signing_runtime_failure_fails_closed_with_503(
+        self, _mock_sign, _mock_check
+    ):
+        with self.assertRaises(SigningServiceUnavailable) as context:
+            self._call(build_happy_path_tx_cbor())
+        self.assertEqual(context.exception.status_code, 503)

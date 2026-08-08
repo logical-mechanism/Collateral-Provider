@@ -170,6 +170,31 @@ class TestCborValidator(unittest.TestCase):
             check_collateral(body, {"TXID": "e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c5", "TXIDX": 0})
         self.assertIn("Collateral Is Not Being Used", str(context.exception.detail))
 
+    def test_rejects_multiple_collateral_inputs(self):
+        body = {
+            13: {
+                (bytes.fromhex("11" * 32), 0),
+                (bytes.fromhex("22" * 32), 1),
+            }
+        }
+        with self.assertRaises(ValidationError) as context:
+            check_collateral(body, {"TXID": "11" * 32, "TXIDX": 0})
+        self.assertIn("Exactly One Collateral", str(context.exception.detail))
+
+    def test_rejects_malformed_input_reference_lengths_and_indices(self):
+        env = {"TXID": "ff" * 32, "TXIDX": 0}
+        malformed = (
+            ((bytes.fromhex("11" * 31), 0), "TxId Must Be 32 Bytes"),
+            ((bytes.fromhex("11" * 32), True), "TxIdx Is Not An Int"),
+            ((bytes.fromhex("11" * 32), -1), "TxIdx Can't Be Negative"),
+            ((bytes.fromhex("11" * 32), 0, 1), "UTxO Must Have Two Elements"),
+        )
+        for txin, message in malformed:
+            with self.subTest(txin=txin):
+                with self.assertRaises(ValidationError) as context:
+                    check_inputs({0: {txin}}, env)
+                self.assertIn(message, str(context.exception.detail))
+
     def test_signer_does_not_exist(self):
         cbor_hex = "84A800D9010282825820E0F9A1641BE97ADD010356E8F8AC278372E2ACAC24EE21F169F861CDDB3C55C500825820E0F9A1641BE97ADD010356E8F8AC278372E2ACAC24EE21F169F861CDDB3C55C5010182A300581D7025891024CD6915AB6F7D85D43869C7BFC7021B7008BAD86E70A7C6CE011A001605BC028201D81843D87980A300581D70C757598C8D204251F0E102B5092ADF5627AEED553911CD6F82BD315401821A00184476A1581C20D133FB8814F3F6E9AA7777D73AAB7C8CDFA7D9B2D1C94BA0F94100A1582000AEB168C1C5A787D5DE5CBC0760D078BCC51B22BA8FA69E432A89137F17D9F601028201D818585BD8799F1B00000192EA62DA801B00000192EA676E601A000493E0581C20D133FB8814F3F6E9AA7777D73AAB7C8CDFA7D9B2D1C94BA0F94100582000AEB168C1C5A787D5DE5CBC0760D078BCC51B22BA8FA69E432A89137F17D9F6FF021A000186A0031A047EB7FF081A047EB5A60B582001CA3D633CA222424E36C1BA5A9CD5501FD4B19F3F6B136AF820DD4B3CCDF3490DD90102818258201D388E615DA2DCA607E28F704130D04E39DA6F251D551D66D054B75607E0393F0012D9010282825820680D6B17AEAC96BD3C965F6E9A6B45082870E267EA260E4AEAC31550719D315901825820724B724EC5C489DFF4D70A2CF94389AAC21F88193891A2D6B3E02B4E2997D39501A105A282000082D87A8082000082000182D87980820000F5F6"
         tx_bytes = check_cbor_hex(cbor_hex)

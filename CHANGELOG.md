@@ -14,35 +14,35 @@ HTTP contract:
   response field that existing clients can ignore.
 - **PATCH** for bug fixes that don't change the contract.
 
-## [Unreleased]
+## [1.3.0] — 2026-08-08
 
 ### Added
 
-- **Optional `additional_utxos` request field.** Forwarded to Ogmios as
-  [`additionalUtxo`](https://ogmios.dev/mini-protocols/local-tx-submission/#additional-utxo-set)
-  on the `evaluateTransaction` call, so callers can splice in UTxOs
-  that don't yet exist on chain (chained-tx / future-input scenarios).
-  Missing or empty is skipped silently. Each entry may be either a
-  `[txin, txout]` pair of objects (the prose-docs shape) or a flat
-  Ogmios v6 `Utxo` object (the JSON-RPC schema shape — what callers
-  learn from Koios directly); both are accepted in the same request and
-  normalized internally to the flat shape Ogmios actually expects on
-  the wire. The JSON-encoded field is capped at 32 KiB and at most 400
-  entries — malformed or oversized input fails locally instead of
-  burning a Koios round-trip.
-- **`tx_hash` and `duration_ms` on the success log line.** JSON
-  formatter surfaces them as top-level fields; text formatter embeds
-  them in the message. Operators can now grep "did we sign tx X" by
-  hash.
+- **Script-execution binding.** Before evaluation, the provider recomputes
+  body field 11 from the exact submitted redeemer/datum CBOR bytes and current
+  protocol cost models. After evaluation, the returned redeemer pointers must
+  exactly match the submitted set and every execution budget committed in the
+  witness set must cover the evaluated requirement. This closes mutable-witness
+  and intentionally under-budget phase-2-invalid paths.
+- **Privacy-safe request logging.** Application request records no longer
+  persist raw client IPs. Successful witness issuance records the environment,
+  duration, and request ID but not the transaction hash. This avoids creating
+  a durable mapping from a network identity to an on-chain transaction while
+  preserving operational correlation and latency data.
+- **Console/journald logging mode.** `LOG_TO_CONSOLE=True` sends all app and
+  Django logs to stderr and does not instantiate the rotating file handler.
+  File logging remains the default. Both modes use one consistent destination
+  per logger, eliminating duplicate and error-only console records.
 - **Container-platform deploy shape.** [`Dockerfile`](Dockerfile),
   [`docker-entrypoint.sh`](docker-entrypoint.sh), and
   [`.do/app.yaml`](.do/app.yaml) bundle a one-command DigitalOcean App
   Platform deploy: push to `main` → DO rebuilds the image and rolls it
   out behind their TLS-terminating router. Signing keys enter the
   runtime via `SKEY_CONTENTS` / `VKEY_CONTENTS` SECRET env vars (or a
-  mounted volume); the entrypoint materializes them to `/run/keys/`
-  (tmpfs) before exec'ing gunicorn so the existing `ApiConfig.ready()`
-  signing-key check is satisfied. Operator runbook in
+  mounted volume); the entrypoint materializes them to `/run/keys/` on the
+  container's ephemeral writable layer before exec'ing gunicorn so the
+  existing `ApiConfig.ready()` signing-key check is satisfied. Operators may
+  mount that path as tmpfs when supported. Operator runbook in
   [`docs/DEPLOY.md`](docs/DEPLOY.md).
 - **`whitenoise`** dependency for in-process static-file serving so
   the deployed container needs no separate web server. Picked the
@@ -63,26 +63,77 @@ HTTP contract:
 
 ### Changed
 
+- Caller-supplied `additional_utxos` can no longer be enabled or forwarded.
+  Missing and empty values remain harmless compatibility inputs; every
+  non-empty value returns 400. A future parent reference cannot authenticate
+  the output that parent will create, so safe support requires complete parent
+  CBOR verification or an authoritative mempool rather than a gREST race check.
 - The collateral throttle now uses the same trusted-proxy-aware client
-  identity as bans and logging, preventing forged `X-Forwarded-For` values
-  from creating fresh rate-limit buckets.
+  identity as bans and metrics authorization, preventing forged
+  `X-Forwarded-For` values from creating fresh rate-limit buckets.
+- Trusted-proxy client detection now validates IP syntax and walks
+  `X-Forwarded-For` from right to left, skipping only configured proxy hops.
+  A caller-prefixed leftmost value is no longer treated as authoritative;
+  malformed chains fail closed to the immediate peer.
+- Client-supplied `X-Request-ID` values are accepted only when they are 1–64
+  safe ASCII characters (`A-Z`, `a-z`, `0-9`, `.`, `_`, `:`, `-`). Unsafe
+  or overlong values are replaced with a freshly generated ID instead of
+  being reflected into response headers and logs.
+- Invalid `/<environment>/collateral/` route values now share the bounded
+  Prometheus label `environment="unknown"`, preventing attacker-controlled
+  metric-series cardinality.
+- Hot-reload caches for JSON registries and signing keys now compare
+  `(mtime_ns, size, inode)` rather than requiring mtime to increase. Atomic
+  replacements reload even with equal or older timestamps, and readiness sees
+  such key rotations immediately.
+- Witness creation now derives the returned public key from the exact signing
+  key snapshot used for the signature and rechecks its configured PKH. A
+  two-file key replacement can fail transiently with 503 but cannot emit a
+  signature/public-key pair assembled from different identities.
+- `known.hosts.json` is validated before publication: PKHs and public keys must
+  be canonical and cryptographically consistent; network names, transaction
+  IDs, indices, and HTTPS `/<network>/collateral/` endpoints must match the
+  wallet-facing schema. Invalid updates retain the last valid registry.
 - Startup now verifies the signing key, verification key, PKH, collateral
   transaction IDs, and indices are internally consistent.
 - Transaction and Koios envelopes fail closed: exactly four transaction
   elements, no trailing CBOR, a map-shaped witness set, and a JSON-RPC 2.0
   evaluation-result list are required before signing.
+- `GET /livez` now provides network-free process liveness, while `/healthz`
+  cryptographically revalidates the current skey/vkey/PKH on every readiness
+  probe. The public known-hosts registry is no longer treated as a signing
+  dependency.
+- Outbound Koios calls use a configurable nonblocking per-process admission
+  budget (`KOIOS_MAX_IN_FLIGHT`, default 4), preserving worker capacity and
+  returning a fast 503 during upstream saturation.
+- Successful evaluation must contain at least one well-formed Plutus redeemer
+  budget; an empty result can no longer use the service as a general signing
+  oracle.
+- Protocol-parameter and evaluation calls use unique JSON-RPC IDs, exact method
+  correlation, bounded streamed responses, and strict schemas. Current cost
+  models are cached for five minutes per environment/upstream URL, with
+  single-flight refresh so concurrent cold-cache requests do not stampede the
+  evaluator.
+- The collateral safety boundary is now explicit: the witness binds only the
+  body, CIP-40 return fields remain optional for builder compatibility, and
+  operators must use a dedicated key controlling only the advertised UTxO.
+- Added a wallet integration contract covering provider discovery, transaction
+  construction, finalized script-data/budget requirements, local witness
+  verification, byte-preserving witness insertion, error handling, and
+  multi-provider retry behavior.
 
 - **JSON-only request bodies on `/<env>/collateral/`.** DRF's default
   also accepted form-encoded and multipart, which was undocumented
   surface area. Non-JSON content types now return 415.
 - **Body-size cap dropped from Django's 2.5 MiB default** to a value
-  derived from `MAX_TX_SIZE` and `ADDITIONAL_UTXOS_MAX_BYTES` (≈ 64
-  KiB by default). The protocol caps a tx at 16 KiB binary (32 KiB
-  hex); the derived cap leaves room for the JSON envelope and
-  `additional_utxos` while making oversized junk cheap to reject.
-- **`MAX_TX_SIZE` and `ADDITIONAL_UTXOS_MAX_BYTES` are now env-overridable**
-  from settings, so a future hard-fork that bumps the protocol
-  parameter doesn't require a code redeploy.
+  derived from `MAX_TX_SIZE` (≈ 36 KiB by default). The protocol caps a
+  tx at 16 KiB binary (32 KiB hex); the derived cap leaves room for the
+  JSON envelope while making oversized junk cheap to reject. A dedicated
+  pre-parser middleware reads at most the cap plus one byte, including when
+  `Content-Length` is absent, and returns the documented JSON 413 response
+  before the view runs.
+- **`MAX_TX_SIZE` is now env-overridable** so a future hard fork that bumps
+  the protocol parameter does not require a code deploy.
 - **Validation orchestration moved out of the serializer** into
   `api.services.collateral.issue_witness`. The serializer is now
   shape-only; the service runs the validator chain, calls Koios, and
@@ -216,8 +267,8 @@ with 1.0; everything below is either additive or an internal change.
 
 ### Changed
 
-- Every 4xx/5xx response now uses the same shape: `{"detail": "<message>"}`.
-  Previously the API returned `{"tx_body": ["..."]}` for validator errors,
+- Every 4xx/5xx response from the collateral endpoint now uses the same shape:
+  `{"detail": "<message>"}`. Previously it returned `{"tx_body": ["..."]}` for validator errors,
   `{"error": "..."}` for invalid environment, and `{"detail": "..."}` for
   everything else. Internal serializer field names no longer leak.
 - Koios calls now have a `(3s connect, 5s read)` timeout. Network failures

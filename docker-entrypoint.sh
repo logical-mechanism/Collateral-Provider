@@ -1,8 +1,8 @@
 #!/bin/sh
 # Container entrypoint.
 #
-# Materializes signing keys onto a tmpfs path if they were supplied via
-# encrypted env vars (the common DigitalOcean App Platform pattern):
+# Materializes signing keys under /run if they were supplied via encrypted env
+# vars (the common DigitalOcean App Platform pattern):
 #
 #   SKEY_CONTENTS=<full JSON of payment.skey, OR just the cborHex value>
 #   VKEY_CONTENTS=<full JSON of payment.vkey, OR just the cborHex value>
@@ -18,9 +18,10 @@
 # SKEY_PATH / VKEY_PATH the operator configured (e.g. a mounted volume)
 # is used as-is.
 #
-# Why a tmpfs path: the materialized files live under /run, which is a
-# tmpfs on most container runtimes; they do not persist across container
-# restarts and are not written to the image layers.
+# The files live on the container's ephemeral writable layer and are not
+# written into image layers or persisted across replacement containers.
+# Operators who require memory-backed storage should mount /run/keys as tmpfs;
+# a plain Docker container does not make that guarantee automatically.
 
 set -eu
 

@@ -15,14 +15,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
-    # In a container the default file-based debug.log is wrong:
-    # gunicorn's stdout is what the platform captures, /app/collateral_provider/
-    # isn't writable by the unprivileged app user, and any file we did write
-    # would die with the container on restart. Send the rotating handler at
-    # /dev/null and emit JSON-per-line on stdout so log aggregators index
-    # fields cleanly. Operators can override either by setting the env var
-    # in their platform spec.
-    LOG_FILE=/dev/null \
+    # In a container the default file-based debug.log is wrong. Select the
+    # console handler explicitly so no file is opened; the platform captures
+    # stderr and retains it independently of the ephemeral container.
+    LOG_TO_CONSOLE=True \
     LOG_FORMAT=json
 
 # libsodium isn't strictly required (PyNaCl bundles its own), but build-essential
@@ -77,11 +73,11 @@ WORKDIR /app/collateral_provider
 
 EXPOSE 8080
 
-# Entrypoint materializes SKEY_CONTENTS / VKEY_CONTENTS env vars to
-# tmpfs files (/run/keys/) before exec'ing gunicorn. Operators using a
-# mounted volume for keys can simply leave those env vars unset — the
-# entrypoint skips the materialization and gunicorn picks up whatever
-# SKEY_PATH / VKEY_PATH point to.
+# Entrypoint materializes SKEY_CONTENTS / VKEY_CONTENTS env vars on the
+# container's ephemeral writable layer at /run/keys before exec'ing gunicorn.
+# Mount /run/keys as tmpfs when memory-backed key storage is required.
+# Operators using a mounted volume for keys can leave those env vars unset;
+# gunicorn then reads whatever SKEY_PATH / VKEY_PATH point to.
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # Workers + threads. The whole product is a thin wrapper around a Koios

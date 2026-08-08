@@ -114,6 +114,8 @@ def check_collateral(body: dict, env_settings: dict) -> None:
     collaterals = body[COLLATERAL_INPUTS]
     if not isinstance(collaterals, set):
         raise_validation_error("Collateral Is Not A Set")
+    if len(collaterals) != 1:
+        raise_validation_error("Exactly One Collateral Input Is Required")
 
     expected_txid = env_settings["TXID"]
     expected_idx = env_settings["TXIDX"]
@@ -144,15 +146,13 @@ def check_signers(body: dict, pkh: str) -> None:
 def _check_utxo_shape(utxo) -> None:
     if not isinstance(utxo, tuple):
         raise_validation_error("UTxO Is Not A Tuple")
-    try:
-        utxo[0]
-    except IndexError:
-        raise_validation_error("TxId Does Not Exist In UTxO")
+    if len(utxo) != 2:
+        raise_validation_error("UTxO Must Have Two Elements")
     if not isinstance(utxo[0], bytes):
         raise_validation_error("TxId Is Not Bytes")
-    try:
-        utxo[1]
-    except IndexError:
-        raise_validation_error("TxIdx Does Not Exist In UTxO")
-    if not isinstance(utxo[1], int):
+    if len(utxo[0]) != 32:
+        raise_validation_error("TxId Must Be 32 Bytes")
+    if not isinstance(utxo[1], int) or isinstance(utxo[1], bool):
         raise_validation_error("TxIdx Is Not An Int")
+    if utxo[1] < 0:
+        raise_validation_error("TxIdx Can't Be Negative")

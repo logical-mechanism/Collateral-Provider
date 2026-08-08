@@ -38,7 +38,7 @@ configargparse==1.7.5
     # via locust
 coverage==7.13.5
     # via -r requirements-dev.in
-django==5.2.14
+django==5.2.16
     # via
     #   -r requirements.in
     #   django-cors-headers
@@ -75,7 +75,7 @@ gunicorn==23.0.0
     # via -r requirements.in
 h11==0.16.0
     # via wsproto
-idna==3.13
+idna==3.15
     # via requests
 inflection==0.5.1
     # via drf-spectacular
@@ -96,7 +96,7 @@ markupsafe==3.0.3
     #   flask
     #   jinja2
     #   werkzeug
-msgpack==1.1.2
+msgpack==1.2.1
     # via locust
 packaging==26.2
     # via
@@ -124,11 +124,11 @@ pyproject-hooks==1.2.0
     #   pip-tools
 pytest==9.0.3
     # via locust
-python-engineio==4.13.1
+python-engineio==4.13.2
     # via
     #   locust
     #   python-socketio
-python-socketio==5.16.1
+python-socketio==5.16.2
     # via locust
 pyyaml==6.0.3
     # via drf-spectacular

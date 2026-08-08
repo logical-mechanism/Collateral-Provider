@@ -12,12 +12,45 @@ Address strings are the **raw output address bytes** in lowercase hex
 (matching what ``check_outputs`` compares against), not bech32.
 """
 
+import ipaddress
+import re
+
 from django.conf import settings
 
 from api.data_files import MtimeReloadingJson
 
 _DEFAULT = {"addresses": [], "ips": []}
 _loader: MtimeReloadingJson | None = None
+_LOWER_HEX_RE = re.compile(r"(?:[0-9a-f]{2})+")
+
+
+def _valid_bans(value: object) -> bool:
+    """Accept only the exact collection types the hot path expects.
+
+    Keeping the last good document on a bad operator update is safer than
+    either raising a 500 on every signing request or silently replacing the
+    active bans with an empty default.
+    """
+    if not isinstance(value, dict):
+        return False
+    addresses = value.get("addresses")
+    ips = value.get("ips")
+    if not isinstance(addresses, list) or not isinstance(ips, list):
+        return False
+    if not all(
+        isinstance(address, str) and _LOWER_HEX_RE.fullmatch(address) is not None
+        for address in addresses
+    ):
+        return False
+    for address in ips:
+        if not isinstance(address, str) or "%" in address:
+            return False
+        try:
+            if str(ipaddress.ip_address(address)) != address:
+                return False
+        except ValueError:
+            return False
+    return True
 
 
 def _bans() -> dict:
@@ -27,7 +60,7 @@ def _bans() -> dict:
     global _loader
     path = settings.BANS_PATH
     if _loader is None or _loader.path != path:
-        _loader = MtimeReloadingJson(path, default=_DEFAULT)
+        _loader = MtimeReloadingJson(path, default=_DEFAULT, validator=_valid_bans)
     return _loader.get()
 
 

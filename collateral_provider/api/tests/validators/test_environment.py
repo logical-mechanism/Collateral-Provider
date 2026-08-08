@@ -12,7 +12,8 @@ class TestEnvironmentValidator(unittest.TestCase):
         ip_address = "127.0.0.1"
         with self.assertRaises(ValidationError) as context:
             check_ip_address(ip_address)
-        self.assertIn(f"{ip_address} Is Banned", str(context.exception.detail))
+        self.assertIn("Client IP Is Banned", str(context.exception.detail))
+        self.assertNotIn(ip_address, str(context.exception.detail))
 
     def test_check_ip_address_allowed(self):
         # Not banned — must return without raising.

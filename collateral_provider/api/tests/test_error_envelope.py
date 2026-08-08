@@ -50,12 +50,16 @@ class TestErrorEnvelope(TestCase):
     @patch("api.validators.transaction.evaluate_transaction")
     def test_503_uses_detail(self, mock_eval):
         from api.simulate import UpstreamUnavailable
-        from api.tests.test_views import build_happy_path_tx_cbor
+        from api.tests.test_views import TEST_COST_MODELS, build_happy_path_tx_cbor
         mock_eval.side_effect = UpstreamUnavailable("upstream down")
 
-        response = self.client.post(
-            self.url, {"tx": build_happy_path_tx_cbor()}, format="json"
-        )
+        with patch(
+            "api.validators.transaction.get_protocol_cost_models",
+            return_value=TEST_COST_MODELS,
+        ):
+            response = self.client.post(
+                self.url, {"tx": build_happy_path_tx_cbor()}, format="json"
+            )
         self.assertEqual(response.status_code, 503)
         body = response.json()
         self.assertEqual(set(body.keys()), {"detail"})

@@ -1,7 +1,9 @@
 import os
 import tempfile
 import time
+from io import BytesIO
 
+import cbor2
 from django.test import TestCase
 
 from api.signature import (
@@ -12,6 +14,7 @@ from api.signature import (
     tx_id,
     validate_key_material,
     verify,
+    witness_tx_cbor,
 )
 from api.tests.test_data import (
     invalid_tx_body_missing_collateral,
@@ -20,6 +23,41 @@ from api.tests.test_data import (
 
 
 class SignatureTestCase(TestCase):
+
+    def test_body_hash_does_not_bind_outer_validity_or_witnesses(self):
+        """Document the ledger boundary behind the collateral policy.
+
+        Vkey witnesses sign the body only. The outer phase-2 validity flag
+        and witness set may change without changing the transaction id; the
+        ledger, not this signature, enforces that the flag matches script
+        evaluation.
+        """
+        original = valid_tx_body_cbor_with_collateral()
+        original_bytes = bytes.fromhex(original)
+        decoded = cbor2.loads(original_bytes)
+        stream = BytesIO(original_bytes)
+        self.assertEqual(stream.read(1), b"\x84")
+        body_start = stream.tell()
+        cbor2.CBORDecoder(stream).decode()
+        body_bytes = original_bytes[body_start : stream.tell()]
+
+        changed_validity = (
+            b"\x84"
+            + body_bytes
+            + cbor2.dumps(decoded[1])
+            + cbor2.dumps(not decoded[2])
+            + cbor2.dumps(decoded[3])
+        ).hex()
+        self.assertEqual(tx_id(original), tx_id(changed_validity))
+
+        changed_witnesses = (
+            b"\x84"
+            + body_bytes
+            + cbor2.dumps({0: [[bytes(32), bytes(64)]]})
+            + cbor2.dumps(decoded[2])
+            + cbor2.dumps(decoded[3])
+        ).hex()
+        self.assertEqual(tx_id(original), tx_id(changed_witnesses))
 
     def test_verify_works_on_good_signature(self):
         pk = "7EE70C8FF8CABD12E8453C942D65D5D5B504CC658028981F5EC16664D7B0ACBD"
@@ -100,6 +138,22 @@ class GetKeyFromFileTestCase(TestCase):
         self.addCleanup(os.unlink, vkey.name)
         return skey.name, vkey.name
 
+    def _atomic_replace_key(self, path: str, value: str, mtime_ns: int) -> None:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".key",
+            dir=os.path.dirname(path),
+            delete=False,
+        ) as replacement:
+            replacement.write('{"cborHex":"5820' + value + '"}')
+            replacement_path = replacement.name
+        try:
+            os.utime(replacement_path, ns=(mtime_ns, mtime_ns))
+            os.replace(replacement_path, path)
+        finally:
+            if os.path.exists(replacement_path):
+                os.unlink(replacement_path)
+
     def test_validates_consistent_signing_identity(self):
         skey = "00" * 32
         vkey = "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
@@ -117,6 +171,23 @@ class GetKeyFromFileTestCase(TestCase):
         paths = self._key_files("00" * 32, vkey)
         with self.assertRaisesRegex(ValueError, "PKH does not match"):
             validate_key_material(*paths, "00" * 28)
+
+    def test_witness_derives_public_key_from_signing_key_and_checks_pkh(self):
+        skey = "00" * 32
+        vkey = "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
+        pkh = "cb9358529df4729c3246a2a033cb9821abbfd16de4888005904abc41"
+        skey_path, _ = self._key_files(skey, vkey)
+
+        witness, _ = witness_tx_cbor(
+            valid_tx_body_cbor_with_collateral(), skey_path, pkh
+        )
+        decoded = cbor2.loads(bytes.fromhex(witness))
+        self.assertEqual(decoded[1][0].hex(), vkey)
+
+        with self.assertRaisesRegex(ValueError, "does not match configured PKH"):
+            witness_tx_cbor(
+                valid_tx_body_cbor_with_collateral(), skey_path, "00" * 28
+            )
 
     def test_strips_cbor_tag_prefix(self):
         # 5820 is the CBOR tag for "byte string of length 32" — the leading 4
@@ -145,10 +216,10 @@ class GetKeyFromFileTestCase(TestCase):
             path = f.name
         try:
             first = get_key_from_file(path)
-            mtime_before = os.path.getmtime(path)
+            stat_before = os.stat(path)
             with open(path, "w") as f:
                 f.write('{"cborHex": "5820' + "ef" * 32 + '"}')
-            os.utime(path, (mtime_before, mtime_before))
+            os.utime(path, ns=(stat_before.st_atime_ns, stat_before.st_mtime_ns))
             second = get_key_from_file(path)
             self.assertEqual(first, second)
         finally:
@@ -174,5 +245,38 @@ class GetKeyFromFileTestCase(TestCase):
             second = get_key_from_file(path)
             self.assertEqual(second, "22" * 32)
             self.assertNotEqual(first, second)
+        finally:
+            os.unlink(path)
+
+    def test_reloads_equal_mtime_atomic_replacement(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".skey", delete=False) as f:
+            f.write('{"cborHex": "5820' + "11" * 32 + '"}')
+            path = f.name
+        try:
+            self.assertEqual(get_key_from_file(path), "11" * 32)
+            original = os.stat(path)
+
+            self._atomic_replace_key(path, "22" * 32, original.st_mtime_ns)
+
+            replacement = os.stat(path)
+            self.assertNotEqual(replacement.st_ino, original.st_ino)
+            self.assertEqual(replacement.st_mtime_ns, original.st_mtime_ns)
+            self.assertEqual(get_key_from_file(path), "22" * 32)
+        finally:
+            os.unlink(path)
+
+    def test_reloads_older_mtime_atomic_replacement(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".skey", delete=False) as f:
+            f.write('{"cborHex": "5820' + "11" * 32 + '"}')
+            path = f.name
+        try:
+            self.assertEqual(get_key_from_file(path), "11" * 32)
+            original = os.stat(path)
+            older_mtime_ns = max(0, original.st_mtime_ns - 1_000_000_000)
+
+            self._atomic_replace_key(path, "22" * 32, older_mtime_ns)
+
+            self.assertLessEqual(os.stat(path).st_mtime_ns, original.st_mtime_ns)
+            self.assertEqual(get_key_from_file(path), "22" * 32)
         finally:
             os.unlink(path)

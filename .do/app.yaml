@@ -45,8 +45,8 @@ services:
     # /healthz is unthrottled, returns 503 if signing keys become
     # unreadable, and 200 otherwise. App Platform routes traffic to the
     # instance only once this returns 200.
-    # /healthz does synchronous file reads on the signing keys and the
-    # known_hosts registry. Under transient I/O slowness or while a
+    # /healthz cryptographically checks the current signing identity. Under
+    # transient I/O slowness or while a
     # worker is mid-Koios-call, a 3s probe timeout is easy to miss and
     # produces spurious instance replacements (which themselves cause
     # 504s during the swap window). Loosen both the timeout and the
@@ -79,19 +79,21 @@ services:
         type: SECRET
         value: REPLACE_WITH_A_50_CHAR_RANDOM_STRING
 
-      # Signing keys: paste the entire JSON content of payment.skey /
-      # payment.vkey here. The container's entrypoint writes them to
-      # /run/keys/ at boot and points SKEY_PATH / VKEY_PATH there.
+      # Signing keys: inject the bare cborHex string from payment.skey /
+      # payment.vkey as the secret value. (An unquoted JSON object is parsed
+      # by YAML as a mapping.) The entrypoint wraps cborHex in the minimal key
+      # envelope, writes it to /run/keys/ at boot, and points SKEY_PATH /
+      # VKEY_PATH there.
       # If you'd rather mount a volume, leave these empty and set
       # SKEY_PATH / VKEY_PATH directly to point into the volume mount.
       - key: SKEY_CONTENTS
         scope: RUN_TIME
         type: SECRET
-        value: REPLACE_WITH_PAYMENT_SKEY_JSON_CONTENT
+        value: REPLACE_WITH_PAYMENT_SKEY_CBORHEX
       - key: VKEY_CONTENTS
         scope: RUN_TIME
         type: SECRET
-        value: REPLACE_WITH_PAYMENT_VKEY_JSON_CONTENT
+        value: REPLACE_WITH_PAYMENT_VKEY_CBORHEX
 
       # --- Required: production posture ---
       - key: ENVIRONMENT
@@ -125,10 +127,10 @@ services:
         value: --mainnet
 
       # --- Optional but strongly recommended in production ---
-      # LOG_FORMAT=json and LOG_FILE=/dev/null are baked into the
-      # Dockerfile as defaults — App Platform captures gunicorn stdout
-      # and indexes the JSON fields. Override here only if you want
-      # plain-text logs or a different sink.
+      # LOG_FORMAT=json and LOG_TO_CONSOLE=True are baked into the
+      # Dockerfile as defaults — App Platform captures stderr and indexes
+      # the JSON fields. Override here only if you want plain-text logs or a
+      # different sink.
       - key: LOG_LEVEL
         value: INFO
       - key: COLLATERAL_THROTTLE_RATE

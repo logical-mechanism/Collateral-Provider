@@ -10,7 +10,9 @@ from nacl.encoding import RawEncoder
 from nacl.exceptions import BadSignatureError
 from nacl.signing import SigningKey, VerifyKey
 
-_key_cache: dict[str, tuple[float, str]] = {}
+from api.data_files import FileIdentity, file_identity, stat_identity
+
+_key_cache: dict[str, tuple[FileIdentity, str]] = {}
 _key_cache_lock = RLock()
 
 
@@ -19,24 +21,27 @@ def get_key_from_file(file_path: str) -> str:
     the raw key bytes as hex. The leading 4 hex chars are the CBOR
     byte-string tag and are stripped.
 
-    Cached by ``(path, mtime)``: a key rotation (atomic write of a new
-    skey/vkey) is picked up on the next signing request without restarting
-    the process. The hot-path cost is one ``os.path.getmtime`` syscall.
+    Cached by ``(path, mtime_ns, size, inode)``: a key rotation (atomic write
+    of a new skey/vkey) is picked up on the next signing request without
+    restarting the process, even if the replacement preserves or backdates
+    its mtime. The hot-path cost is one ``os.stat`` syscall.
     Concurrent re-reads are serialized under a lock so two threads racing
     to load a freshly-rotated key don't both end up parsing the file.
     """
-    mtime = os.path.getmtime(file_path)
+    identity = file_identity(file_path)
     cached = _key_cache.get(file_path)
-    if cached is not None and cached[0] == mtime:
+    if cached is not None and cached[0] == identity:
         return cached[1]
     with _key_cache_lock:
+        identity = file_identity(file_path)
         cached = _key_cache.get(file_path)
-        if cached is not None and cached[0] == mtime:
+        if cached is not None and cached[0] == identity:
             return cached[1]
         with open(file_path) as file:
+            opened_identity = stat_identity(os.fstat(file.fileno()))
             data = json.load(file)
         hex_value = data["cborHex"][4:]
-        _key_cache[file_path] = (mtime, hex_value)
+        _key_cache[file_path] = (opened_identity, hex_value)
         return hex_value
 
 
@@ -157,15 +162,27 @@ def create_witness_cbor(public_key: str, signature: str) -> str:
     ).hex()
 
 
-def witness_tx_cbor(tx_cbor: str, skey_path: str, vkey_path: str) -> tuple[str, str]:
+def witness_tx_cbor(tx_cbor: str, skey_path: str, expected_pkh: str) -> tuple[str, str]:
     """Hash the body, sign it with the on-disk skey, return ``(witness_cbor, tx_hash)``.
 
-    The tx hash is exposed so callers can log it on success — operators
-    can grep "did we sign tx X" in structured logs without needing the
-    request id from the original caller.
+    The transaction hash is returned for internal verification and tests; the
+    HTTP layer deliberately does not persist it alongside request metadata.
+
+    Derive the witness public key from the exact signing key snapshot used for
+    the signature and verify its configured PKH. Reading a separately rotated
+    vkey here could otherwise pair a signature from one identity with the
+    public key from another and return an unusable witness.
     """
     sk = get_key_from_file(skey_path)
-    pk = get_key_from_file(vkey_path)
+    try:
+        signing_key = SigningKey(bytes.fromhex(sk))
+        public_key = bytes(signing_key.verify_key)
+        pkh = bytes.fromhex(expected_pkh)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("signing identity is invalid") from exc
+    if len(pkh) != 28 or hashlib.blake2b(public_key, digest_size=28).digest() != pkh:
+        raise ValueError("signing key does not match configured PKH")
+
     tx_hash = tx_id(tx_cbor)
-    sig = sign(sk, tx_hash)
-    return create_witness_cbor(pk, sig), tx_hash
+    signature = signing_key.sign(bytes.fromhex(tx_hash)).signature.hex()
+    return create_witness_cbor(public_key.hex(), signature), tx_hash

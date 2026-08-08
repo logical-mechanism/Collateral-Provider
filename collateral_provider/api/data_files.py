@@ -1,4 +1,4 @@
-"""Mtime-aware JSON reloader.
+"""Stat-identity-aware JSON reloader.
 
 Both the ban list and the known-hosts registry are operator-curated data,
 not code. We don't want a code deploy to be the latency for "ban this
@@ -6,21 +6,34 @@ scammer." Instead the operator edits the JSON file (atomic
 write-tmp + rename is the expected workflow) and the service picks up
 the new content on the next request.
 
-The cost on the hot path is one ``os.path.getmtime`` syscall per access.
-A reload only happens when the mtime has actually advanced.
+The cost on the hot path is one ``os.stat`` syscall per access. A reload
+happens whenever ``(mtime_ns, size, inode)`` changes, including atomic
+replacements whose timestamp is equal to or older than the previous file.
 """
 
 import json
 import logging
 import os
+from collections.abc import Callable
 from threading import RLock
 
 logger = logging.getLogger("api")
 
+type FileIdentity = tuple[int, int, int]
+
+
+def stat_identity(stat_result: os.stat_result) -> FileIdentity:
+    """Return the fields that identify the observed contents of a file."""
+    return (stat_result.st_mtime_ns, stat_result.st_size, stat_result.st_ino)
+
+
+def file_identity(path: str) -> FileIdentity:
+    """Stat ``path`` and return its reload identity."""
+    return stat_identity(os.stat(path))
+
 
 class MtimeReloadingJson:
-    """Cache the parsed JSON of a file. Re-read if and only if the file's
-    mtime has advanced since the last successful read.
+    """Cache the parsed JSON of a file and re-read when its identity changes.
 
     Behavior on edge cases:
     - File missing on first access: returns ``default``, doesn't crash.
@@ -31,11 +44,17 @@ class MtimeReloadingJson:
     - File present but unparseable: same. Logs ERROR; keeps last good.
     """
 
-    def __init__(self, path: str, default):
+    def __init__(
+        self,
+        path: str,
+        default,
+        validator: Callable[[object], bool | None] | None = None,
+    ):
         self._path = path
         self._default = default
+        self._validator = validator
         self._lock = RLock()
-        self._mtime: float | None = None
+        self._identity: FileIdentity | None = None
         self._data = default
 
     @property
@@ -44,26 +63,50 @@ class MtimeReloadingJson:
 
     def get(self):
         try:
-            mtime = os.path.getmtime(self._path)
+            identity = file_identity(self._path)
         except FileNotFoundError:
-            if self._mtime is not None:
+            if self._identity is not None:
                 logger.warning("Reloadable file disappeared: %s", self._path)
             return self._data
+        except OSError as exc:
+            logger.error("Failed to stat %s: %s", self._path, exc)
+            return self._data
 
-        if self._mtime is not None and mtime <= self._mtime:
+        if self._identity == identity:
             return self._data
 
         with self._lock:
             # Re-check under lock in case another thread already reloaded.
-            if self._mtime is not None and mtime <= self._mtime:
+            try:
+                identity = file_identity(self._path)
+            except OSError as exc:
+                logger.error("Failed to stat %s: %s", self._path, exc)
                 return self._data
+            if self._identity == identity:
+                return self._data
+            attempted_identity = identity
             try:
                 with open(self._path) as f:
+                    # Cache the identity of the file descriptor we actually
+                    # parsed. If the path is atomically replaced after open,
+                    # the next access sees the new path identity and reloads.
+                    attempted_identity = stat_identity(os.fstat(f.fileno()))
                     new_data = json.load(f)
-            except (OSError, json.JSONDecodeError) as exc:
+                if self._validator is not None:
+                    validation_result = self._validator(new_data)
+                    if validation_result is False:
+                        raise ValueError("JSON content failed schema validation")
+            except OSError as exc:
                 logger.error("Failed to read %s: %s", self._path, exc)
                 return self._data
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                # Avoid reparsing and relogging the exact same bad operator
+                # update on every request. Any in-place correction changes
+                # mtime/size; an atomic correction changes the inode.
+                self._identity = attempted_identity
+                logger.error("Rejected invalid data in %s: %s", self._path, exc)
+                return self._data
             self._data = new_data
-            self._mtime = mtime
+            self._identity = attempted_identity
             logger.info("Reloaded %s", self._path)
             return self._data

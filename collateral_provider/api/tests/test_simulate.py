@@ -1,17 +1,40 @@
+import json
 import unittest
 from unittest.mock import Mock, patch
 
 import requests
 from django.test import override_settings
 
-from api.simulate import UpstreamUnavailable, evaluate_transaction
+from api.simulate import (
+    UpstreamUnavailable,
+    evaluate_transaction,
+)
+
+TEST_RPC_ID = "0123456789abcdef0123456789abcdef"
 
 
 def _mock_response(status_code: int, json_value=None, json_raises=None):
     """Helper: build a Mock that looks like a requests.Response."""
+    if isinstance(json_value, dict) and (
+        "result" in json_value or "error" in json_value
+    ):
+        json_value = {
+            "id": TEST_RPC_ID,
+            "jsonrpc": "2.0",
+            "method": "evaluateTransaction",
+            **json_value,
+        }
     response = Mock()
     response.status_code = status_code
     response.text = "" if json_value is None else str(json_value)
+    raw_content = (
+        b"<not-json>"
+        if json_raises is not None
+        else b"" if json_value is None else json.dumps(json_value).encode("utf-8")
+    )
+    response.content = raw_content
+    response.headers = {}
+    response.iter_content.return_value = [raw_content]
     if json_raises is not None:
         response.json.side_effect = json_raises
     else:
@@ -20,12 +43,38 @@ def _mock_response(status_code: int, json_value=None, json_raises=None):
 
 
 class TestEvaluateTransaction(unittest.TestCase):
+    def setUp(self):
+        self.rpc_id_patcher = patch(
+            "api.simulate.secrets.token_hex", return_value=TEST_RPC_ID
+        )
+        self.rpc_id_patcher.start()
+
+    def tearDown(self):
+        self.rpc_id_patcher.stop()
+
+    @patch("api.simulate._session.post")
+    @patch("api.simulate._upstream_slots")
+    def test_local_capacity_exhaustion_fails_before_http(self, mock_slots, mock_post):
+        mock_slots.acquire.return_value = False
+        with self.assertRaises(UpstreamUnavailable):
+            evaluate_transaction("deadbeef", "preprod")
+        mock_post.assert_not_called()
+        mock_slots.release.assert_not_called()
+
     @patch("api.simulate._session.post")
     def test_returns_parsed_json_on_2xx_success(self, mock_post):
         mock_post.return_value = _mock_response(200, {"jsonrpc": "2.0", "result": []})
 
         result = evaluate_transaction("deadbeef", "preprod")
-        self.assertEqual(result, {"jsonrpc": "2.0", "result": []})
+        self.assertEqual(
+            result,
+            {
+                "id": TEST_RPC_ID,
+                "jsonrpc": "2.0",
+                "method": "evaluateTransaction",
+                "result": [],
+            },
+        )
 
         # URL comes from settings.ENVIRONMENTS[<env>]['KOIOS_URL'].
         call_url = mock_post.call_args[0][0]
@@ -67,96 +116,13 @@ class TestEvaluateTransaction(unittest.TestCase):
         evaluate_transaction("cafebabe", "mainnet")
         sent_json = mock_post.call_args.kwargs["json"]
         self.assertEqual(sent_json["jsonrpc"], "2.0")
+        self.assertEqual(sent_json["id"], TEST_RPC_ID)
         self.assertEqual(sent_json["method"], "evaluateTransaction")
         self.assertEqual(sent_json["params"]["transaction"]["cbor"], "cafebabe")
-        # additionalUtxo only appears when the caller provided one.
+        self.assertIs(mock_post.call_args.kwargs["stream"], True)
+        self.assertIs(mock_post.call_args.kwargs["allow_redirects"], False)
+        # Caller-supplied chain state is never sent to the evaluator.
         self.assertNotIn("additionalUtxo", sent_json["params"])
-
-    @patch("api.simulate._session.post")
-    def test_additional_utxos_flattened_into_v6_utxo_objects(self, mock_post):
-        # Public API takes [txin, txout] pairs (per the prose docs) but
-        # Ogmios v6's JSON-RPC schema rejects array-shaped entries with
-        # "parsing TxIn failed, expected Object, but encountered Array".
-        # simulate.py merges the pair into one flat Utxo object before
-        # forwarding so the call actually reaches script evaluation.
-        mock_post.return_value = _mock_response(200, {"result": []})
-        txin = {"transaction": {"id": "ab" * 32}, "index": 0}
-        txout = {"address": "addr_test1...", "value": {"ada": {"lovelace": 1_000_000}}}
-        evaluate_transaction("cafebabe", "preprod", additional_utxos=[[txin, txout]])
-        params = mock_post.call_args.kwargs["json"]["params"]
-        self.assertEqual(params["additionalUtxo"], [{**txin, **txout}])
-
-    @patch("api.simulate._session.post")
-    def test_additional_utxos_flattening_preserves_optional_output_fields(self, mock_post):
-        # datum/datumHash/script live on the output side of the pair and
-        # must survive the merge so script evaluation sees them.
-        mock_post.return_value = _mock_response(200, {"result": []})
-        txin = {"transaction": {"id": "cd" * 32}, "index": 3}
-        txout = {
-            "address": "addr_test1...",
-            "value": {"ada": {"lovelace": 2_000_000}},
-            "datumHash": "ef" * 32,
-            "script": {"language": "plutus:v3", "cbor": "deadbeef"},
-        }
-        evaluate_transaction("cafebabe", "preprod", additional_utxos=[[txin, txout]])
-        sent = mock_post.call_args.kwargs["json"]["params"]["additionalUtxo"]
-        self.assertEqual(len(sent), 1)
-        self.assertEqual(sent[0]["transaction"], txin["transaction"])
-        self.assertEqual(sent[0]["index"], txin["index"])
-        self.assertEqual(sent[0]["address"], txout["address"])
-        self.assertEqual(sent[0]["datumHash"], txout["datumHash"])
-        self.assertEqual(sent[0]["script"], txout["script"])
-
-    @patch("api.simulate._session.post")
-    def test_additional_utxos_flat_object_entries_pass_through(self, mock_post):
-        # When a caller already sends Ogmios v6's flat Utxo shape (e.g.
-        # they built against Koios docs directly), no merge is needed —
-        # the entry is forwarded unchanged.
-        mock_post.return_value = _mock_response(200, {"result": []})
-        flat = {
-            "transaction": {"id": "ab" * 32},
-            "index": 0,
-            "address": "addr_test1...",
-            "value": {"ada": {"lovelace": 1_000_000}},
-        }
-        evaluate_transaction("cafebabe", "preprod", additional_utxos=[flat])
-        sent = mock_post.call_args.kwargs["json"]["params"]["additionalUtxo"]
-        self.assertEqual(sent, [flat])
-
-    @patch("api.simulate._session.post")
-    def test_additional_utxos_mixed_pair_and_flat_entries(self, mock_post):
-        # A single request may interleave both accepted input shapes;
-        # each is normalized independently to the flat wire shape.
-        mock_post.return_value = _mock_response(200, {"result": []})
-        txin = {"transaction": {"id": "ab" * 32}, "index": 0}
-        txout = {"address": "addr_test1...", "value": {"ada": {"lovelace": 1_000_000}}}
-        flat = {
-            "transaction": {"id": "cd" * 32},
-            "index": 1,
-            "address": "addr_test1...other",
-            "value": {"ada": {"lovelace": 2_000_000}},
-        }
-        evaluate_transaction(
-            "cafebabe", "preprod", additional_utxos=[[txin, txout], flat]
-        )
-        sent = mock_post.call_args.kwargs["json"]["params"]["additionalUtxo"]
-        self.assertEqual(sent, [{**txin, **txout}, flat])
-
-    @patch("api.simulate._session.post")
-    def test_empty_additional_utxos_omitted_from_payload(self, mock_post):
-        mock_post.return_value = _mock_response(200, {"result": []})
-        evaluate_transaction("cafebabe", "preprod", additional_utxos=[])
-        self.assertNotIn(
-            "additionalUtxo", mock_post.call_args.kwargs["json"]["params"]
-        )
-
-    @patch("api.simulate._session.post")
-    def test_none_additional_utxos_omitted_from_payload(self, mock_post):
-        mock_post.return_value = _mock_response(200, {"result": []})
-        evaluate_transaction("cafebabe", "preprod", additional_utxos=None)
-        self.assertNotIn(
-            "additionalUtxo", mock_post.call_args.kwargs["json"]["params"]
-        )
 
     @patch("api.simulate._session.post")
     def test_passes_timeout_to_requests(self, mock_post):
@@ -178,7 +144,6 @@ class TestEvaluateTransaction(unittest.TestCase):
         mock_post.side_effect = requests.ConnectionError("dns failed")
         with self.assertRaises(UpstreamUnavailable):
             evaluate_transaction("deadbeef", "preprod")
-
     # HTTP status handling -------------------------------------------------
 
     @patch("api.simulate._session.post")
@@ -187,7 +152,12 @@ class TestEvaluateTransaction(unittest.TestCase):
         # error (rather than 200 + {"error": ...}). Either way it's a real
         # verdict on the user's transaction, not an outage. Must NOT raise
         # UpstreamUnavailable — the caller relies on inspecting "result".
-        body = {"jsonrpc": "2.0", "error": {"code": -32602, "message": "Bad inputs"}}
+        body = {
+            "id": TEST_RPC_ID,
+            "jsonrpc": "2.0",
+            "method": "evaluateTransaction",
+            "error": {"code": -32602, "message": "Bad inputs"},
+        }
         mock_post.return_value = _mock_response(400, body)
 
         result = evaluate_transaction("deadbeef", "preprod")
@@ -211,6 +181,25 @@ class TestEvaluateTransaction(unittest.TestCase):
             evaluate_transaction("deadbeef", "preprod")
 
     @patch("api.simulate._session.post")
+    def test_operational_4xx_is_upstream_unavailable(self, mock_post):
+        for status_code in (401, 403, 404, 429):
+            with self.subTest(status_code=status_code):
+                mock_post.return_value = _mock_response(
+                    status_code, {"error": "not a transaction verdict"}
+                )
+                with self.assertRaises(UpstreamUnavailable):
+                    evaluate_transaction("deadbeef", "preprod")
+
+    @patch("api.simulate._session.post")
+    def test_oversized_evaluation_response_is_upstream_unavailable(self, mock_post):
+        mock_post.return_value = _mock_response(200, {"result": []})
+        mock_post.return_value.iter_content.return_value = [
+            b"x" * (1024 * 1024 + 1)
+        ]
+        with self.assertRaises(UpstreamUnavailable):
+            evaluate_transaction("deadbeef", "preprod")
+
+    @patch("api.simulate._session.post")
     def test_5xx_with_non_json_body_raises_upstream_unavailable(self, mock_post):
         mock_post.return_value = _mock_response(500, "<html>Server error</html>")
         # The mock above sets json_value="<html>...", which the real
@@ -226,3 +215,35 @@ class TestEvaluateTransaction(unittest.TestCase):
         mock_post.return_value = _mock_response(200, json_raises=ValueError("not json"))
         with self.assertRaises(UpstreamUnavailable):
             evaluate_transaction("deadbeef", "preprod")
+
+    @patch("api.simulate._session.post")
+    def test_pathological_json_parse_failures_are_upstream_unavailable(self, mock_post):
+        invalid_bodies = (
+            b'{"number":' + (b"1" * 5000) + b"}",
+            (b"[" * 2000) + (b"]" * 2000),
+        )
+        for body in invalid_bodies:
+            with self.subTest(size=len(body)):
+                response = _mock_response(200, {"result": []})
+                response.iter_content.return_value = [body]
+                mock_post.return_value = response
+                with self.assertRaises(UpstreamUnavailable):
+                    evaluate_transaction("deadbeef", "preprod")
+
+    @patch("api.simulate._session.post")
+    def test_missing_or_mismatched_jsonrpc_id_is_upstream_unavailable(self, mock_post):
+        for body in (
+            {"jsonrpc": "2.0", "result": []},
+            {"id": "another-request", "jsonrpc": "2.0", "result": []},
+            [],
+        ):
+            with self.subTest(body=body):
+                response = _mock_response(200, body)
+                # _mock_response normally adds the fixed id to RPC-shaped
+                # dictionaries, so restore the exact malformed vector.
+                response.json.return_value = body
+                response.content = json.dumps(body).encode("utf-8")
+                response.iter_content.return_value = [response.content]
+                mock_post.return_value = response
+                with self.assertRaises(UpstreamUnavailable):
+                    evaluate_transaction("deadbeef", "preprod")

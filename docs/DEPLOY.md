@@ -30,11 +30,17 @@ Open [.do/app.yaml](../.do/app.yaml) and replace every
 | --- | --- |
 | `PKH` | The PKH derived from your `payment.vkey` |
 | `DJANGO_SECRET_KEY` | The 50-char random string from above |
-| `SKEY_CONTENTS` | The **entire contents** of `payment.skey` (it's a single-line JSON: `{"type":"...","description":"...","cborHex":"..."}`) |
-| `VKEY_CONTENTS` | The entire contents of `payment.vkey` |
+| `SKEY_CONTENTS` | The bare `cborHex` string from `payment.skey` (for example, `5820...`), injected as a DO secret |
+| `VKEY_CONTENTS` | The bare `cborHex` string from `payment.vkey`, injected as a DO secret |
 | `PREPROD_TXID`, `PREPROD_TXIDX` | The collateral UTxO you've funded on preprod |
 | `MAINNET_TXID`, `MAINNET_TXIDX` | The collateral UTxO you've funded on mainnet |
 | `ALLOWED_HOSTS` | After step 2, paste the DO-issued hostname here, plus your custom domain if you have one |
+
+Do not paste an unquoted full JSON key object into `.do/app.yaml`: YAML parses
+it as a mapping instead of a string. The entrypoint intentionally accepts the
+bare `cborHex` form so the checked-in spec remains unambiguous. If you inject
+secrets through another mechanism, a correctly quoted full JSON string is
+also accepted.
 
 The `github.repo` field assumes
 `logical-mechanism/Collateral-Provider`. If you're deploying a fork,
@@ -152,8 +158,10 @@ Two paths, depending on whether you opted into the persistent volume in
   $ vi /data/bans.json
   $ exit
   ```
-  The next request reads the new file (mtime-aware reload). No restart
-  required.
+  Use an atomic write-temp-then-rename update. The next request detects the
+  file's `(mtime_ns, size, inode)` identity and reloads it even if its timestamp
+  is equal or older. Invalid JSON/schema updates retain the last valid data;
+  no restart is required.
 
 ### Scraping `/metrics`
 
@@ -185,7 +193,7 @@ The current spec runs one `basic-xxs` instance. To scale:
 ## What's where on the deployed instance
 
 ```
-/app/                                  WORKDIR root, owned by the app user
+/app/                                  image contents owned by root
   collateral_provider/
     manage.py
     .cache/                            file-based throttle cache (writable)
@@ -194,7 +202,11 @@ The current spec runs one `basic-xxs` instance. To scale:
       key/                             EMPTY — keys land at /run/keys/
     bans.json                          baked into image (or /data/bans.json)
     known.hosts.json (parent dir)      baked into image (or /data/known.hosts.json)
-/run/keys/                             tmpfs, populated by docker-entrypoint.sh
+/run/keys/                             ephemeral writable layer, populated by entrypoint
   payment.skey                         from $SKEY_CONTENTS
   payment.vkey                         from $VKEY_CONTENTS
 ```
+
+Mount `/run/keys` as tmpfs if your container platform supports it and you need
+the materialized key files to be memory-backed. The default image guarantees
+only that they are absent from image layers and discarded with the container.

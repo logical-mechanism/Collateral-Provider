@@ -68,3 +68,18 @@ class TestHealthz(TestCase):
     def test_healthz_method_not_allowed_on_post(self):
         response = self.client.post(self.url)
         self.assertEqual(response.status_code, 405)
+
+    @override_settings(KNOWN_HOSTS_PATH="/nonexistent/known.hosts.json")
+    def test_known_hosts_registry_is_not_a_signing_dependency(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+    @override_settings(
+        SKEY_PATH="/nonexistent/payment.skey",
+        VKEY_PATH="/nonexistent/payment.vkey",
+    )
+    def test_livez_stays_up_when_readiness_fails(self):
+        response = self.client.get("/livez")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+        self.assertEqual(response["Cache-Control"], "no-store")
