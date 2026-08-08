@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+
+# Local DigitalOcean spec copies contain runtime secrets. The checked-in
+# .do/app.yaml remains a placeholder-only template.
+.do/app.local.yaml

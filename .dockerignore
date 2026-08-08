@@ -37,6 +37,7 @@ collateral_provider/api/key/
 .vscode/
 
 # Docs/scripts that aren't needed inside the running image
+.do/
 docs/
 guides/
 scripts/

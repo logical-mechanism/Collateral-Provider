@@ -142,7 +142,11 @@ identity/network values still fail loudly when absent.
 
 ## Branch state
 
-`production` is the deployed branch and may lag `main`. Don't assume they match. The remote `main` is the integration branch — PR there.
+`production` is the deployed branch and may lag `main`. Don't assume they
+match. The remote `main` is the integration branch — PR there, promote a
+reviewed commit to `production`, then manually run the production deployment
+workflow with that branch selected. Ubuntu/systemd is the canonical deploy;
+the DigitalOcean App Platform spec is an optional, non-auto-deploying path.
 
 ## Style this repo prefers
 

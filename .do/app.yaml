@@ -1,10 +1,13 @@
 # DigitalOcean App Platform spec.
 #
-# Apply via:
-#   doctl apps create --spec .do/app.yaml          # first time
-#   doctl apps update <app-id> --spec .do/app.yaml # subsequent edits
+# Copy to the gitignored .do/app.local.yaml, fill secrets there, then apply:
+#   doctl apps create --spec .do/app.local.yaml          # first time
+#   doctl apps update <app-id> --spec .do/app.local.yaml # subsequent edits
 #
-# Push-to-main → DO rebuilds the Docker image and rolls it out. No SSH.
+# Optional DigitalOcean App Platform spec. The canonical production path is
+# the manually approved Ubuntu workflow documented in docs/UBUNTU_DEPLOY.md.
+# Automatic deploys are disabled here so one Git push cannot activate two
+# independent production mechanisms.
 #
 # Operator setup checklist lives in docs/DEPLOY.md. The short version:
 # fill in the three SECRET env vars (DJANGO_SECRET_KEY, SKEY_CONTENTS,
@@ -21,14 +24,14 @@ region: nyc
 
 services:
   - name: web
-    # Build the image from the repo's Dockerfile. App Platform watches
-    # the deploy_on_push branch and triggers a rebuild on every push.
+    # Build the image from the repo's Dockerfile. Production code is promoted
+    # through the production branch, but App Platform deploys remain manual.
     dockerfile_path: Dockerfile
 
     github:
       repo: logical-mechanism/Collateral-Provider
-      branch: main
-      deploy_on_push: true
+      branch: production
+      deploy_on_push: false
 
     # Smallest paid tier. The service is light (one upstream, ed25519
     # signatures, 16 KiB max payload), so basic-xxs is enough — bump
@@ -99,10 +102,11 @@ services:
       - key: ENVIRONMENT
         value: production
       - key: ALLOWED_HOSTS
-        # Comma-separated. Always include the DO-issued hostname plus
-        # any custom domain. Find the DO hostname in the App Platform
-        # web console under "Domains".
-        value: REPLACE_WITH_DO_HOSTNAME,your-custom-domain.example
+        # Bootstrap with Django's leading-dot subdomain form so the first DO
+        # health check can use the not-yet-known issued hostname. Immediately
+        # after creation, replace it in app.local.yaml with that exact hostname
+        # plus any custom domain, then update the app.
+        value: .ondigitalocean.app,your-custom-domain.example
       - key: TRUSTED_PROXY_IPS
         # DO App Platform's HTTP router connects to the container from
         # a private IP — the exact address rotates and isn't pinned in

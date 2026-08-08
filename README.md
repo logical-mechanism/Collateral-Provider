@@ -200,6 +200,12 @@ so a caller-prefixed leftmost value cannot override the proxy-appended client
 address. The proxy should still replace or correctly append the header and
 prevent direct public access to gunicorn.
 
+The canonical single-host production setup and manually triggered GitHub
+deployment workflow are documented in
+[`docs/UBUNTU_DEPLOY.md`](docs/UBUNTU_DEPLOY.md). The DigitalOcean App
+Platform container path remains available as an optional alternative in
+[`docs/DEPLOY.md`](docs/DEPLOY.md).
+
 ## Configuration
 
 Every operational knob is overridable via `.env`. See

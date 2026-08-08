@@ -35,9 +35,10 @@ HTTP contract:
   per logger, eliminating duplicate and error-only console records.
 - **Container-platform deploy shape.** [`Dockerfile`](Dockerfile),
   [`docker-entrypoint.sh`](docker-entrypoint.sh), and
-  [`.do/app.yaml`](.do/app.yaml) bundle a one-command DigitalOcean App
-  Platform deploy: push to `main` → DO rebuilds the image and rolls it
-  out behind their TLS-terminating router. Signing keys enter the
+  [`.do/app.yaml`](.do/app.yaml) provide an optional DigitalOcean App
+  Platform deploy template. It tracks reviewed `production` code with
+  push-triggered deploys disabled, avoiding a second automatic production
+  path alongside the Ubuntu workflow. Signing keys enter the
   runtime via `SKEY_CONTENTS` / `VKEY_CONTENTS` SECRET env vars (or a
   mounted volume); the entrypoint materializes them to `/run/keys/` on the
   container's ephemeral writable layer before exec'ing gunicorn so the
@@ -60,6 +61,13 @@ HTTP contract:
   serving regressions the unit tests can't.
 - **Dependabot config** for `pip` and `github-actions` ecosystems.
   Weekly schedule, security updates grouped.
+- **Manual Ubuntu production deployment.** A `workflow_dispatch`-only GitHub
+  workflow reruns CI for the selected `production` commit, streams that exact
+  Git archive over pinned native OpenSSH, and performs a public readiness
+  smoke test. The server helper installs an immutable versioned release,
+  atomically switches `current`, restarts the systemd service, and rolls back
+  on failed local readiness. Application configuration and signing keys remain
+  only on the server.
 
 ### Changed
 

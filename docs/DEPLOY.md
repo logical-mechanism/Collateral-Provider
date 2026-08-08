@@ -1,8 +1,14 @@
-# Deploying to DigitalOcean App Platform
+# Optional: deploying to DigitalOcean App Platform
 
-This is the one-time setup for the App Platform deploy. Once it's wired
-up, every push to `main` rebuilds the image and rolls it out — no SSH,
-no `systemctl restart`.
+The canonical production path is the manually triggered Ubuntu + systemd
+deployment in [UBUNTU_DEPLOY.md](UBUNTU_DEPLOY.md). This document describes an
+optional DigitalOcean App Platform alternative. Its checked-in spec tracks the
+`production` branch with `deploy_on_push: false`; deployments are manual and
+are not part of the Ubuntu release workflow.
+
+This is the one-time setup for the App Platform alternative. After promoting a
+reviewed commit to `production`, explicitly create an App Platform deployment;
+a Git push alone does not roll it out.
 
 For local development setup, see [README.md](../README.md). This file
 is operator-facing.
@@ -21,10 +27,15 @@ is operator-facing.
 
 ## One-time setup
 
-### 1. Edit `.do/app.yaml`
+### 1. Create a gitignored local spec
 
-Open [.do/app.yaml](../.do/app.yaml) and replace every
-`REPLACE_WITH_...` sentinel with the real value:
+Copy the checked-in template, restrict it, then replace every
+`REPLACE_WITH_...` sentinel in the local copy with the real value:
+
+```bash
+cp .do/app.yaml .do/app.local.yaml
+chmod 600 .do/app.local.yaml
+```
 
 | Field | What to paste |
 | --- | --- |
@@ -34,9 +45,9 @@ Open [.do/app.yaml](../.do/app.yaml) and replace every
 | `VKEY_CONTENTS` | The bare `cborHex` string from `payment.vkey`, injected as a DO secret |
 | `PREPROD_TXID`, `PREPROD_TXIDX` | The collateral UTxO you've funded on preprod |
 | `MAINNET_TXID`, `MAINNET_TXIDX` | The collateral UTxO you've funded on mainnet |
-| `ALLOWED_HOSTS` | After step 2, paste the DO-issued hostname here, plus your custom domain if you have one |
+| `ALLOWED_HOSTS` | Keep `.ondigitalocean.app` only for the first health check; after step 2, replace it with the exact DO-issued hostname plus your custom domain, if any |
 
-Do not paste an unquoted full JSON key object into `.do/app.yaml`: YAML parses
+Do not paste an unquoted full JSON key object into the spec: YAML parses
 it as a mapping instead of a string. The entrypoint intentionally accepts the
 bare `cborHex` form so the checked-in spec remains unambiguous. If you inject
 secrets through another mechanism, a correctly quoted full JSON string is
@@ -48,19 +59,18 @@ update it.
 
 > ⚠️ The `value:` next to a `type: SECRET` env var goes into DO's
 > encrypted store the moment you submit the spec. It is **not**
-> retrievable afterwards — only updatable. Keep your local copy of
-> the spec out of git history (the file is tracked but the
-> placeholders are sentinels — don't commit a spec with the secrets
-> filled in).
+> retrievable afterwards — only updatable. `.do/app.local.yaml` is ignored by
+> both Git and the Docker build context, but it is still a plaintext local
+> secret file: keep mode 0600, protect backups, and never force-add it.
 
 ### 2. Create the app
 
 ```bash
-doctl apps create --spec .do/app.yaml
+doctl apps create --spec .do/app.local.yaml
 ```
 
 App Platform will:
-1. Clone the repo at `main`.
+1. Clone the repo at `production`.
 2. Build the Docker image from `Dockerfile`.
 3. Boot the container, wait for `/healthz` to return 200, then route
    traffic to it.
@@ -75,11 +85,12 @@ doctl apps logs <app-id> --type build --follow
 
 Once live, the app gets a hostname like
 `collateral-provider-abc12.ondigitalocean.app`. Update `ALLOWED_HOSTS`
-in `.do/app.yaml` to include it (without the scheme), then push the
-update:
+in `.do/app.local.yaml` to include it (without the scheme) and remove the
+temporary `.ondigitalocean.app` wildcard, then apply the
+updated spec:
 
 ```bash
-doctl apps update <app-id> --spec .do/app.yaml
+doctl apps update <app-id> --spec .do/app.local.yaml
 ```
 
 ### 3. Verify the deploy
@@ -102,17 +113,17 @@ In the App Platform web console:
 1. Add your domain under **Settings → Domains**.
 2. Update your DNS to the `CNAME` DO provides.
 3. DO provisions a free Let's Encrypt cert.
-4. Add the domain to `ALLOWED_HOSTS` in `.do/app.yaml` and push the
-   spec.
+4. Add the domain to `ALLOWED_HOSTS` in `.do/app.local.yaml` and apply it with
+   `doctl apps update <app-id> --spec .do/app.local.yaml`.
 
 ## Day-2 operations
 
 ### Updating env vars
 
-Edit `.do/app.yaml`, then:
+Edit `.do/app.local.yaml`, then:
 
 ```bash
-doctl apps update <app-id> --spec .do/app.yaml
+doctl apps update <app-id> --spec .do/app.local.yaml
 ```
 
 This triggers a rolling redeploy with the new values. Existing requests
@@ -124,8 +135,9 @@ finish on the old container before traffic shifts.
    instance.
 2. Fund a new collateral UTxO under the new PKH.
 3. Update `SKEY_CONTENTS`, `VKEY_CONTENTS`, `PKH`,
-   `PREPROD_TXID`/`MAINNET_TXID` in `.do/app.yaml` simultaneously.
-4. `doctl apps update --spec`. App Platform rolls the new keys in;
+   `PREPROD_TXID`/`MAINNET_TXID` in `.do/app.local.yaml` simultaneously.
+4. `doctl apps update <app-id> --spec .do/app.local.yaml`. App Platform rolls
+   the new keys in;
    the old container drains. Brief race window where the listed
    collateral UTxO doesn't match the listed PKH is unavoidable —
    schedule rotation off-peak.
@@ -146,11 +158,14 @@ Or in the web console: **Activity** → click a previous deploy →
 ### Editing the ban list / known-hosts registry
 
 Two paths, depending on whether you opted into the persistent volume in
-`.do/app.yaml`:
+`.do/app.local.yaml`:
 
 - **Default (no volume).** `bans.json` and `known.hosts.json` live
-  inside the image. Edit the files in the repo, commit, push to `main`.
-  DO rebuilds and rolls out the new content.
+  inside the image. Edit the files in the repo, commit, promote the reviewed
+  commit to `production`, then trigger a deployment explicitly:
+  ```bash
+  doctl apps create-deployment <app-id>
+  ```
 
 - **With volume.** Files live on the mounted `/data/` volume.
   ```bash
@@ -165,7 +180,7 @@ Two paths, depending on whether you opted into the persistent volume in
 
 ### Scraping `/metrics`
 
-Off by default. To turn on, add to `.do/app.yaml`:
+Off by default. To turn on, add to `.do/app.local.yaml`:
 
 ```yaml
 - key: METRICS_ENABLED

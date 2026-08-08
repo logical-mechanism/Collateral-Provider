@@ -89,6 +89,19 @@ If you're running this service:
       Under systemd or a container runtime, configure journal/runtime retention
       and access controls. In file mode, restrict `LOG_FILE` to the service user.
 
+### Ubuntu/systemd deploys
+
+The canonical single-host deployment is documented in
+[docs/UBUNTU_DEPLOY.md](docs/UBUNTU_DEPLOY.md). Keep the deployment identity
+separate from the runtime identity: the deploy account may write versioned
+code releases and may reset failure state, restart, or stop only
+`collateral-provider.service`, while only the runtime account can read the
+application environment and signing keys. The stop is used only when a failed
+first deploy has no prior version to restore. Pin the server host key in
+GitHub; do not discover it with `ssh-keyscan` inside CI.
+Protect the GitHub `production` environment with required review and a
+`production`-only deployment-branch rule.
+
 ### Container-platform deploys (DigitalOcean App Platform, Fly, Render, ...)
 
 If you're using the [DigitalOcean App Platform deploy](docs/DEPLOY.md)

@@ -1,0 +1,58 @@
+[Unit]
+Description=Collateral Provider API
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=collateral-provider
+Group=collateral-provider
+WorkingDirectory=/srv/collateral-provider/current/collateral_provider
+EnvironmentFile=/etc/collateral-provider/environment
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/srv/collateral-provider/current/.venv/bin/gunicorn collateral_provider.wsgi:application --bind 127.0.0.1:8000 --worker-class gthread --workers 2 --threads 8 --timeout 60 --graceful-timeout 30 --keep-alive 75 --worker-tmp-dir /run/collateral-provider --access-logfile - --error-logfile -
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStartSec=60
+TimeoutStopSec=35
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=collateral-provider
+RuntimeDirectoryMode=0750
+StateDirectory=collateral-provider
+StateDirectoryMode=0750
+UMask=0027
+
+# The process needs outbound DNS/TCP to reach Koios, read-only access to the
+# current release and key files, and write access only to its state/runtime
+# directories.
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+ProtectSystem=strict
+ProcSubset=pid
+ReadOnlyPaths=/srv/collateral-provider /etc/collateral-provider
+ReadWritePaths=/var/lib/collateral-provider /run/collateral-provider
+RemoveIPC=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,2 @@
+# Validate with: visudo -cf /etc/sudoers.d/collateral-provider-deploy
+collateral-deploy ALL=(root) NOPASSWD: /usr/bin/systemctl reset-failed collateral-provider.service, /usr/bin/systemctl restart collateral-provider.service, /usr/bin/systemctl stop collateral-provider.service
