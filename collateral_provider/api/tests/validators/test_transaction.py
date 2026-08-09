@@ -61,6 +61,63 @@ class TestTransactionValidator(unittest.TestCase):
         mock_eval.assert_called_once_with(TX_CBOR, "preprod")
 
     @patch("api.validators.transaction.evaluate_transaction")
+    def test_structured_validator_pointer_is_accepted(self, mock_eval):
+        """Koios's Ogmios reports the pointer as an object, not a string.
+
+        Every fixture in this suite used the flat ``"spend:0"`` form, so a
+        parser that accepted only that shape passed CI while rejecting every
+        real evaluation as malformed and answering 503 to transactions that
+        had genuinely passed. This is the exact payload Koios returns.
+        """
+        mock_eval.return_value = _evaluation_response(
+            [
+                {
+                    "validator": {"index": 0, "purpose": "spend"},
+                    "budget": {"memory": 1, "cpu": 1},
+                }
+            ]
+        )
+        check_valid_tx(TX_CBOR, "preprod")
+
+    @patch("api.validators.transaction.evaluate_transaction")
+    def test_structured_validator_pointer_still_binds_the_budget(self, mock_eval):
+        # The object form must be held to the same budget comparison as the
+        # string form, or it becomes a way to bypass the check entirely.
+        mock_eval.return_value = _evaluation_response(
+            [
+                {
+                    "validator": {"index": 0, "purpose": "spend"},
+                    "budget": {"memory": 11, "cpu": 1},
+                }
+            ]
+        )
+        with self.assertRaises(ValidationError) as context:
+            check_valid_tx(TX_CBOR, "preprod")
+        self.assertIn(
+            "Redeemer Execution Budget Is Too Small", str(context.exception.detail)
+        )
+
+    @patch("api.validators.transaction.evaluate_transaction")
+    def test_malformed_structured_validator_pointer_is_upstream_failure(
+        self, mock_eval
+    ):
+        for validator in (
+            {"index": 0},
+            {"purpose": "spend"},
+            {"index": -1, "purpose": "spend"},
+            {"index": True, "purpose": "spend"},
+            {"index": 0, "purpose": "nonsense"},
+            {"index": "0", "purpose": "spend"},
+            {"index": 0, "purpose": 1},
+        ):
+            with self.subTest(validator=validator):
+                mock_eval.return_value = _evaluation_response(
+                    [{"validator": validator, "budget": {"memory": 1, "cpu": 1}}]
+                )
+                with self.assertRaises(UpstreamServiceUnavailable):
+                    check_valid_tx(TX_CBOR, "preprod")
+
+    @patch("api.validators.transaction.evaluate_transaction")
     def test_invalid_tx_raises_validation_error(self, mock_eval):
         # A real ledger verdict. Ogmios reports transaction-domain failures
         # with its own codes in the 3000s (3161 = script went beyond its
