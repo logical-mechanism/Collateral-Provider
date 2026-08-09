@@ -24,33 +24,34 @@ _loader: MtimeReloadingJson | None = None
 _LOWER_HEX_RE = re.compile(r"(?:[0-9a-f]{2})+")
 
 
-def _valid_bans(value: object) -> bool:
+def _valid_bans(value: object) -> None:
     """Accept only the exact collection types the hot path expects.
 
-    Keeping the last good document on a bad operator update is safer than
-    either raising a 500 on every signing request or silently replacing the
-    active bans with an empty default.
+    Raises ``ValueError`` on a bad document, matching the one validator
+    contract ``MtimeReloadingJson`` supports. Keeping the last good document
+    on a bad operator update is safer than either raising a 500 on every
+    signing request or silently replacing the active bans with an empty
+    default. The raised message is what gets logged, so it names the problem.
     """
     if not isinstance(value, dict):
-        return False
+        raise ValueError("bans document must be an object")
     addresses = value.get("addresses")
     ips = value.get("ips")
     if not isinstance(addresses, list) or not isinstance(ips, list):
-        return False
-    if not all(
-        isinstance(address, str) and _LOWER_HEX_RE.fullmatch(address) is not None
-        for address in addresses
-    ):
-        return False
+        raise ValueError("bans document must contain 'addresses' and 'ips' lists")
+    for address in addresses:
+        if not isinstance(address, str) or _LOWER_HEX_RE.fullmatch(address) is None:
+            raise ValueError(
+                f"banned address must be lowercase hex output bytes: {address!r}"
+            )
     for address in ips:
         if not isinstance(address, str) or "%" in address:
-            return False
+            raise ValueError(f"banned IP must be an unscoped address string: {address!r}")
         try:
             if str(ipaddress.ip_address(address)) != address:
-                return False
-        except ValueError:
-            return False
-    return True
+                raise ValueError(f"banned IP is not in canonical form: {address!r}")
+        except ValueError as exc:
+            raise ValueError(f"banned IP is invalid: {address!r}") from exc
 
 
 def _bans() -> dict:

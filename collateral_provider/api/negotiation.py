@@ -6,19 +6,24 @@ Kept in its own module rather than in ``api.util``: DRF resolves
 makes DRF try to read it from a partially initialized module.
 """
 
+from rest_framework.exceptions import NotAcceptable
 from rest_framework.negotiation import DefaultContentNegotiation
 
 
 class JSONOnlyContentNegotiation(DefaultContentNegotiation):
-    """Always answer JSON, whatever the client's ``Accept`` header says.
+    """Never 406 — fall back to the view's first renderer instead.
 
     DRF's default negotiation returns 406 to a caller asking for
     ``text/html`` — and with the browsable renderer enabled it did something
     worse, handing back an HTML page instead of the documented
     ``{"detail": ...}`` envelope. Neither is useful to an integrator whose SDK
-    forwards an end user's Accept header. Answering JSON unconditionally makes
-    the response shape a property of the endpoint rather than of the caller's
-    headers.
+    forwards an end user's Accept header.
+
+    Normal negotiation still runs first. Replacing it outright would break any
+    view that legitimately offers more than one media type — notably
+    drf-spectacular's schema endpoint, whose ``?format=json`` and
+    ``Accept: application/json`` selection depend on it, and which would
+    otherwise serve YAML under a JSON content type.
 
     Only *renderer* selection is relaxed. Parser negotiation is inherited
     unchanged, so a form-encoded or multipart body still gets the documented
@@ -26,4 +31,7 @@ class JSONOnlyContentNegotiation(DefaultContentNegotiation):
     """
 
     def select_renderer(self, request, renderers, format_suffix=None):
-        return (renderers[0], renderers[0].media_type)
+        try:
+            return super().select_renderer(request, renderers, format_suffix)
+        except NotAcceptable:
+            return (renderers[0], renderers[0].media_type)

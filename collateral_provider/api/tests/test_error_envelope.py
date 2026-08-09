@@ -9,9 +9,11 @@ the validation error was raised against.
 from unittest.mock import patch
 
 from django.core.cache import cache
-from django.test import TestCase, override_settings
+from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
+
+from api.views import _wants_json
 
 
 @override_settings(ALLOWED_HOSTS=["testserver"])
@@ -183,3 +185,53 @@ class TestNonDrfErrorEnvelope(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response["Content-Type"], "application/json")
         self.assertEqual(response.json(), {"detail": "Invalid Host Header"})
+
+
+@override_settings(ALLOWED_HOSTS=["testserver"])
+class TestNegotiationDoesNotBreakMultiRendererViews(TestCase):
+    """The JSON fallback must not replace negotiation outright.
+
+    An unconditional `renderers[0]` silences 406 but also discards
+    `?format=json` and Accept-based selection, which drf-spectacular's schema
+    view depends on — it would serve YAML bytes under a JSON content type.
+    """
+
+    def test_schema_format_json_returns_json(self):
+        response = self.client.get("/api/schema/?format=json")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("json", response["Content-Type"])
+        self.assertTrue(response.content.lstrip().startswith(b"{"))
+
+    def test_schema_default_still_yaml(self):
+        response = self.client.get("/api/schema/")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.content.lstrip().startswith(b"openapi:"))
+
+
+class TestAcceptPreference(SimpleTestCase):
+    """`_wants_json` must compare stated preferences, not substrings.
+
+    An SDK forwarding an end user's header sends
+    `application/json, text/html;q=0.1` — it contains `text/html` while
+    clearly preferring JSON, and a substring test sent exactly that caller
+    the misleading redirect the 404 fix exists to remove.
+    """
+
+    def test_preference_decides(self):
+        cases = {
+            "application/json, text/html;q=0.1": True,
+            "application/json": True,
+            "*/*": True,
+            "": True,
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8": False,
+            "text/html": False,
+        }
+        factory = RequestFactory()
+        for accept, expected in cases.items():
+            with self.subTest(accept=accept):
+                request = factory.get("/no/such/path", HTTP_ACCEPT=accept)
+                self.assertIs(_wants_json(request), expected)
+
+    def test_collateral_path_is_always_api_surface(self):
+        request = RequestFactory().post("/preprod/collateral/", HTTP_ACCEPT="text/html")
+        self.assertTrue(_wants_json(request))

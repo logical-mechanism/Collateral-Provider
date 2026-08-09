@@ -40,6 +40,11 @@ class _CborCursor:
     def __init__(self, data: bytes):
         self.data = data
         self.pos = 0
+        # One stream for the whole traversal. ``BytesIO(data)`` copies its
+        # argument, and decode_one runs roughly 40-50 times per transaction,
+        # so building it per call copied the entire submitted transaction
+        # (up to MAX_TX_SIZE) that many times.
+        self._stream = BytesIO(data)
 
     def _read_byte(self) -> int:
         if self.pos >= len(self.data):
@@ -80,7 +85,7 @@ class _CborCursor:
         self.pos += 1
 
     def decode_one(self):
-        stream = BytesIO(self.data)
+        stream = self._stream
         stream.seek(self.pos)
         try:
             value = cbor2.CBORDecoder(stream).decode()
@@ -123,8 +128,10 @@ def _map_items(cursor: _CborCursor):
         yield key, value, raw
         if remaining is not None:
             remaining -= 1
-    if length is None:
-        raise ScriptIntegrityError("missing CBOR map break")
+    # No trailing guard for the indefinite-length case: when ``length`` is
+    # None the loop condition is permanently true, so the only exits are the
+    # break branch above and an exception from decode_one/container_length —
+    # a truncated indefinite map already raises "truncated CBOR" there.
 
 
 def _datum_bytes(value: object, raw: bytes) -> bytes:
@@ -225,16 +232,22 @@ def _language_view_pair(language: int, costs: Sequence[int]) -> tuple[bytes, byt
     return cbor2.dumps(language), cbor2.dumps(list(costs))
 
 
+def _assemble_language_views(pairs: Sequence[tuple[bytes, bytes]]) -> bytes:
+    """Serialize already-encoded ``(key, value)`` pairs into the view map."""
+    # The ledger orders the already-encoded keys using canonical CBOR shortlex
+    # ordering.  This notably places V2/V3/V4 before V1 in a mixed map.
+    ordered = sorted(pairs, key=lambda pair: (len(pair[0]), pair[0]))
+    if len(ordered) >= 24:  # Currently impossible, but keep the encoder honest.
+        raise ScriptIntegrityError("too many protocol cost models")
+    return bytes((0xA0 + len(ordered),)) + b"".join(key + value for key, value in ordered)
+
+
 def encode_language_views(cost_models: Mapping[int, Sequence[int]]) -> bytes:
     """Encode the ledger language-view map for one selected model subset."""
     normalized = _validate_cost_models(cost_models)
-    pairs = [_language_view_pair(language, costs) for language, costs in normalized.items()]
-    # The ledger orders the already-encoded keys using canonical CBOR shortlex
-    # ordering.  This notably places V2/V3/V4 before V1 in a mixed map.
-    pairs.sort(key=lambda pair: (len(pair[0]), pair[0]))
-    if len(pairs) >= 24:  # Currently impossible, but keep the encoder honest.
-        raise ScriptIntegrityError("too many protocol cost models")
-    return bytes((0xA0 + len(pairs),)) + b"".join(key + value for key, value in pairs)
+    return _assemble_language_views(
+        [_language_view_pair(language, costs) for language, costs in normalized.items()]
+    )
 
 
 def calculate_script_data_hash(
@@ -265,10 +278,28 @@ def verify_script_data_hash(
     committed_hash, redeemers, datums = script_data_parts(tx_cbor_hex)
     normalized = _validate_cost_models(cost_models)
     languages = sorted(normalized)
+
+    # Encode each language's (key, value) pair exactly once. Going through
+    # calculate_script_data_hash per subset re-validated every cost-model
+    # integer and re-encoded every pair up to 15 times, and PlutusV1's
+    # encoder runs cbor2.dumps once per cost parameter — roughly 2000
+    # redundant calls per signing request.
+    encoded = {
+        language: _language_view_pair(language, normalized[language])
+        for language in languages
+    }
+
+    prefix = redeemers + datums
     matched = False
     for count in range(1, len(languages) + 1):
         for selected in combinations(languages, count):
-            subset = {language: normalized[language] for language in selected}
-            candidate = calculate_script_data_hash(redeemers, datums, subset)
+            language_views = _assemble_language_views(
+                [encoded[language] for language in selected]
+            )
+            candidate = hashlib.blake2b(
+                prefix + language_views, digest_size=32
+            ).digest()
+            # Not short-circuiting keeps the comparison count independent of
+            # which subset matches.
             matched |= hmac.compare_digest(committed_hash, candidate)
     return matched

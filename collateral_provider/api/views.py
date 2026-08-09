@@ -421,14 +421,37 @@ def known_hosts_view(request):
 def _wants_json(request) -> bool:
     """True when the caller is an API client rather than a browsing human.
 
-    A browser navigating to a stale link sends ``Accept: text/html``; an SDK
-    or curl does not. Anything under a configured network prefix is API
-    surface regardless of headers.
+    Deciding on ``"text/html" in accept`` is wrong for the case that matters
+    most here: an SDK forwarding an end user's header sends
+    ``application/json, text/html;q=0.1``, which contains ``text/html`` while
+    clearly preferring JSON. Browsers put ``text/html`` first, so compare the
+    stated preferences instead. Ties favour JSON — a client that expressed no
+    preference is better served by a parseable error than by a redirect.
+
+    Anything under a configured network prefix is API surface regardless of
+    headers.
     """
     if COLLATERAL_PATH_RE.match(request.path):
         return True
-    accept = request.META.get("HTTP_ACCEPT", "")
-    return "text/html" not in accept
+
+    html_quality = json_quality = 0.0
+    for part in request.META.get("HTTP_ACCEPT", "").split(","):
+        media_type, _, parameters = part.strip().partition(";")
+        media_type = media_type.strip().lower()
+        quality = 1.0
+        for parameter in parameters.split(";"):
+            name, _, value = parameter.partition("=")
+            if name.strip().lower() == "q":
+                try:
+                    quality = float(value)
+                except ValueError:
+                    quality = 0.0
+        if media_type in ("text/html", "application/xhtml+xml"):
+            html_quality = max(html_quality, quality)
+        elif media_type in ("application/json", "application/*", "*/*"):
+            json_quality = max(json_quality, quality)
+
+    return html_quality <= json_quality
 
 
 def custom_page_not_found(request, exception):

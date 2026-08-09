@@ -186,7 +186,12 @@ def check_valid_tx(
             tx_body_cbor, cost_models
         )
     except ScriptIntegrityError as exc:
-        raise_validation_error(f"Invalid Script Data Hash: {exc}")
+        # The internal message names cursor mechanics ("truncated CBOR",
+        # "transaction map key is duplicated"), which is operator vocabulary,
+        # not caller vocabulary. Log it, and keep the wallet-facing string in
+        # the repo's Title Case convention.
+        logger.warning("Script data hash could not be established: %s", exc)
+        raise_validation_error("Invalid Script Data Hash In Tx")
     if not script_data_hash_matches:
         raise_validation_error(
             "Script Data Hash Does Not Commit To Submitted Redeemers And Datums"
@@ -198,6 +203,18 @@ def check_valid_tx(
         logger.error("Upstream Evaluation Unavailable: %s", exc)
         raise UpstreamServiceUnavailable() from exc
     if isinstance(response, dict) and "error" in response and "result" not in response:
+        # Distinguish "the ledger rejected this transaction" from "we asked the
+        # evaluator the wrong question". JSON-RPC reserves -32768..-32000 for
+        # protocol-level faults: a KOIOS_URL pointing at a build without
+        # evaluateTransaction answers -32601 Method Not Found over HTTP 200,
+        # and reporting that as a 400 tells every wallet its transaction is bad
+        # while the service is the broken party. Ogmios's own domain errors sit
+        # outside that range and are real verdicts.
+        error = response["error"]
+        code = error.get("code") if isinstance(error, dict) else None
+        if not isinstance(code, int) or isinstance(code, bool) or -32768 <= code <= -32000:
+            logger.error("Upstream Evaluation Rejected The Request: %s", error)
+            raise UpstreamServiceUnavailable()
         raise_validation_error("Transaction Fails Validation")
     if not (
         isinstance(response, dict)

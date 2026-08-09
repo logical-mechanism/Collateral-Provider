@@ -5,12 +5,13 @@ from threading import Event
 from unittest.mock import Mock, patch
 
 import requests
-from django.test import override_settings
+from django.test import SimpleTestCase, override_settings
 
 from api.simulate import (
     PROTOCOL_PARAMETERS_MAX_RESPONSE_BYTES,
     ProtocolParametersUnavailable,
     _clear_protocol_cost_models_cache,
+    _parse_protocol_cost_models,
     _protocol_cost_models_condition,
     _protocol_cost_models_refreshing,
     get_protocol_cost_models,
@@ -279,3 +280,35 @@ class TestProtocolCostModels(unittest.TestCase):
             get_protocol_cost_models("preprod")
         mock_post.assert_not_called()
         mock_slots.release.assert_not_called()
+
+
+class UnknownPlutusLanguageTestCase(SimpleTestCase):
+    """A future Plutus language must not take the whole service down.
+
+    Rejecting the entire cost-model set on one unrecognized name turns every
+    request into a 503 the moment a hard fork ships `plutus:v5` — including
+    transactions that only use languages we already understand.
+    """
+
+    def test_unknown_language_is_skipped(self):
+        parsed = _parse_protocol_cost_models(
+            {
+                "plutusCostModels": {
+                    "plutus:v3": [1, 2, 3],
+                    "plutus:v5": [4, 5, 6],
+                }
+            }
+        )
+        self.assertEqual(parsed, {2: (1, 2, 3)})
+
+    def test_all_languages_unknown_fails_closed(self):
+        with self.assertRaises(ProtocolParametersUnavailable):
+            _parse_protocol_cost_models(
+                {"plutusCostModels": {"plutus:v5": [1, 2, 3]}}
+            )
+
+    def test_known_languages_still_parsed_together(self):
+        parsed = _parse_protocol_cost_models(
+            {"plutusCostModels": {"plutus:v1": [1], "plutus:v2": [2]}}
+        )
+        self.assertEqual(parsed, {0: (1,), 1: (2,)})

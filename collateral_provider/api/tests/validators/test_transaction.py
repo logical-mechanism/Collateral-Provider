@@ -62,15 +62,52 @@ class TestTransactionValidator(unittest.TestCase):
 
     @patch("api.validators.transaction.evaluate_transaction")
     def test_invalid_tx_raises_validation_error(self, mock_eval):
-        # Koios rejected the tx — response carries an 'error', no 'result'.
+        # A real ledger verdict. Ogmios reports transaction-domain failures
+        # with its own codes in the 3000s (3161 = script went beyond its
+        # allocated budget), outside JSON-RPC's reserved range.
         mock_eval.return_value = {
             "jsonrpc": "2.0",
             "method": "evaluateTransaction",
-            "error": {"code": -32602, "message": "Bad inputs"},
+            "error": {"code": 3161, "message": "budget exceeded"},
         }
         with self.assertRaises(ValidationError) as context:
             check_valid_tx(TX_CBOR, "preprod")
         self.assertIn("Transaction Fails Validation", str(context.exception.detail))
+
+    @patch("api.validators.transaction.evaluate_transaction")
+    def test_jsonrpc_protocol_errors_are_upstream_failures_not_bad_transactions(
+        self, mock_eval
+    ):
+        """A broken endpoint must not be reported as a broken transaction.
+
+        JSON-RPC reserves -32768..-32000 for protocol faults. A KOIOS_URL
+        pointing at a build without evaluateTransaction answers -32601 over
+        HTTP 200; calling that a 400 tells every wallet its transaction is bad
+        while the service is the party at fault.
+        """
+        for code in (-32700, -32601, -32602, -32603):
+            with self.subTest(code=code):
+                mock_eval.return_value = {
+                    "jsonrpc": "2.0",
+                    "method": "evaluateTransaction",
+                    "error": {"code": code, "message": "protocol fault"},
+                }
+                with self.assertRaises(UpstreamServiceUnavailable):
+                    check_valid_tx(TX_CBOR, "preprod")
+
+    @patch("api.validators.transaction.evaluate_transaction")
+    def test_error_without_a_numeric_code_is_an_upstream_failure(self, mock_eval):
+        # Unclassifiable means "we don't know", and CLAUDE.md is explicit that
+        # the unknown case must not become a caller-blaming 400.
+        for error in ({"message": "no code"}, "just a string", {"code": "3161"}):
+            with self.subTest(error=error):
+                mock_eval.return_value = {
+                    "jsonrpc": "2.0",
+                    "method": "evaluateTransaction",
+                    "error": error,
+                }
+                with self.assertRaises(UpstreamServiceUnavailable):
+                    check_valid_tx(TX_CBOR, "preprod")
 
     @patch("api.validators.transaction.evaluate_transaction")
     def test_malformed_success_response_is_upstream_failure(self, mock_eval):

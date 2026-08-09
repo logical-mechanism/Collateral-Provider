@@ -123,8 +123,22 @@ def _parse_protocol_cost_models(body: object) -> dict[int, tuple[int, ...]]:
     models = body.get("plutusCostModels")
     if not isinstance(models, dict) or not models:
         raise ProtocolParametersUnavailable("protocol cost models are missing")
-    if any(name not in _PLUTUS_LANGUAGES for name in models):
-        raise ProtocolParametersUnavailable("protocol cost model language is unknown")
+
+    # A hard fork that introduces a language beyond plutus:v4 would otherwise
+    # take the whole service down: rejecting the entire set turns every
+    # request into a 503, including transactions using only languages whose
+    # models we do understand. Skip what we cannot encode and fail only when
+    # nothing usable remains. A transaction that genuinely needs the unknown
+    # language still fails its script-data-hash check, which is a rejected
+    # transaction rather than a scheduled outage.
+    unknown = sorted(name for name in models if name not in _PLUTUS_LANGUAGES)
+    if unknown:
+        logger.warning(
+            "Ignoring unknown Plutus cost model languages: %s", ", ".join(unknown)
+        )
+    models = {name: value for name, value in models.items() if name in _PLUTUS_LANGUAGES}
+    if not models:
+        raise ProtocolParametersUnavailable("no known protocol cost model languages")
 
     parsed: dict[int, tuple[int, ...]] = {}
     for name, parameters in models.items():

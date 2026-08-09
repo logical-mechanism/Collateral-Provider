@@ -126,7 +126,8 @@ class TestHappyPath(TestCase):
         mock_eval.return_value = {
             "jsonrpc": "2.0",
             "method": "evaluateTransaction",
-            "error": {"code": -32602},
+            # Ogmios domain verdict (3xxx), not a JSON-RPC protocol fault.
+            "error": {"code": 3161, "message": "budget exceeded"},
         }
         tx_cbor = build_happy_path_tx_cbor()
 

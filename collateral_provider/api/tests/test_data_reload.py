@@ -69,6 +69,12 @@ def _bump_mtime(path: str) -> None:
     os.utime(path, (now, now))
 
 
+def _require_dict(value):
+    """Validators signal rejection by raising, never by returning False."""
+    if not isinstance(value, dict):
+        raise ValueError("expected an object")
+
+
 class TestMtimeReloadingJson(unittest.TestCase):
     def setUp(self):
         self.path = _make_tmp_path()
@@ -151,7 +157,7 @@ class TestMtimeReloadingJson(unittest.TestCase):
         loader = MtimeReloadingJson(
             self.path,
             default={},
-            validator=lambda value: isinstance(value, dict),
+            validator=_require_dict,
         )
         loader.get()
         _write_json(self.path, ["syntactically-valid", "wrong-shape"])

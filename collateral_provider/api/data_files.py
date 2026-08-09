@@ -48,8 +48,16 @@ class MtimeReloadingJson:
         self,
         path: str,
         default,
-        validator: Callable[[object], bool | None] | None = None,
+        validator: Callable[[object], None] | None = None,
     ):
+        """``validator`` signals rejection by raising ``ValueError``.
+
+        There is exactly one contract, deliberately. Accepting a boolean
+        return as well meant a validator that fell off the end without an
+        explicit ``return`` published the invalid document as live data with
+        no log line — the failure mode is silent, and both shapes are easy to
+        write by accident.
+        """
         self._path = path
         self._default = default
         self._validator = validator
@@ -93,9 +101,7 @@ class MtimeReloadingJson:
                     attempted_identity = stat_identity(os.fstat(f.fileno()))
                     new_data = json.load(f)
                 if self._validator is not None:
-                    validation_result = self._validator(new_data)
-                    if validation_result is False:
-                        raise ValueError("JSON content failed schema validation")
+                    self._validator(new_data)
             except OSError as exc:
                 logger.error("Failed to read %s: %s", self._path, exc)
                 return self._data

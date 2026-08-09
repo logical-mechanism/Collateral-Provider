@@ -10,9 +10,17 @@ Type=simple
 User=collateral-provider
 Group=collateral-provider
 WorkingDirectory=/srv/collateral-provider/current/collateral_provider
-# Declared before EnvironmentFile so an explicit CACHE_DIR in the operator's
-# environment file still overrides this fallback.
+# Fallbacks for the two settings whose defaults are unwritable under the
+# sandboxing below. Declared before EnvironmentFile so an explicit value in the
+# operator's environment file still overrides them.
+#
+# CACHE_DIR otherwise defaults inside the release tree, which ProtectSystem=strict
+# mounts read-only, and every collateral request 500s. LOG_TO_CONSOLE otherwise
+# defaults to False, and merely declaring a RotatingFileHandler makes dictConfig
+# open LOG_FILE (also inside the release tree) at startup — that raises during
+# settings import and every gunicorn worker dies before binding.
 Environment=CACHE_DIR=/var/cache/collateral-provider
+Environment=LOG_TO_CONSOLE=True
 EnvironmentFile=/etc/collateral-provider/environment
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
@@ -27,13 +35,10 @@ RuntimeDirectory=collateral-provider
 RuntimeDirectoryMode=0750
 StateDirectory=collateral-provider
 StateDirectoryMode=0750
-# systemd creates and owns /var/cache/collateral-provider, so the throttle has
-# a writable home even if the environment file omits CACHE_DIR. Without this
-# the default falls back inside the release tree, which ProtectSystem=strict
-# mounts read-only, and every collateral request 500s.
+# systemd creates and owns /var/cache/collateral-provider, which is what makes
+# the CACHE_DIR fallback above land somewhere writable.
 CacheDirectory=collateral-provider
 CacheDirectoryMode=0750
-Environment=CACHE_DIR=/var/cache/collateral-provider
 UMask=0027
 
 # The process needs outbound DNS/TCP to reach Koios, read-only access to the

@@ -34,11 +34,15 @@ class ThrottleCacheRetentionTestCase(SimpleTestCase):
         from django.conf import settings
 
         options = settings.CACHES["default"].get("OPTIONS", {})
-        self.assertGreaterEqual(options.get("MAX_ENTRIES", 0), 10000)
+        # Well above Django's 300 default, but bounded: _cull() globs the
+        # whole directory on every set(), so the ceiling is also a
+        # per-request cost (measured ~1.6 ms at 2000, ~17 ms at 20000).
+        self.assertGreaterEqual(options.get("MAX_ENTRIES", 0), 2000)
+        self.assertLessEqual(options.get("MAX_ENTRIES", 0), 5000)
 
     def test_counter_survives_far_more_client_ips_than_djangos_default(self):
         """A busy IP's counter must outlive 500 one-shot IPs."""
-        with override_settings(CACHES=_file_cache(self.location, MAX_ENTRIES=20000)):
+        with override_settings(CACHES=_file_cache(self.location, MAX_ENTRIES=2000)):
             cache.set("throttle_anon_busy", [1, 2, 3], 600)
             for index in range(500):
                 cache.set(f"throttle_anon_churn_{index}", [1], 600)

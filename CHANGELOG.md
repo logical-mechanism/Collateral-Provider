@@ -99,6 +99,17 @@ HTTP contract:
   documented envelope, on success as well as on error. Rendering is now pinned
   to JSON and content negotiation never returns 406. Parser negotiation is
   unchanged, so a form-encoded body still gets 415.
+- **JSON-RPC protocol faults from the evaluator now return 503, not 400.**
+  Ogmios reports transaction verdicts with its own codes in the 3000s; the
+  reserved `-32768..-32000` range means the request itself was rejected — a
+  `KOIOS_URL` pointing at a build without `evaluateTransaction` answers
+  `-32601` over HTTP 200. Reporting that as 400 told every wallet its
+  transaction was bad while the service was the broken party. An error we
+  cannot classify also fails closed to 503.
+- **An unrecognized Plutus cost-model language is skipped rather than fatal.**
+  A hard fork introducing `plutus:v5` previously made every request 503,
+  including transactions using only languages already understood. The service
+  now logs and ignores unknown languages, failing only when none remain.
 - **A mistyped API path returns a JSON 404** instead of redirecting to the
   landing page. Because mainstream HTTP clients follow redirects by default,
   the old behaviour showed integrators a 200 and an HTML body for a request

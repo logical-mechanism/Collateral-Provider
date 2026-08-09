@@ -210,11 +210,20 @@ CACHES = {
         # means every write past 300 keys deletes a random third of them. Since
         # each throttled client IP is one key, the only abuse control on this
         # endpoint would quietly stop counting under exactly the traffic it
-        # exists to bound. Raise the ceiling well above any plausible number of
-        # concurrent source IPs and cull far more gently when it is reached.
+        # exists to bound.
+        #
+        # The ceiling cannot simply be raised, because FileBasedCache._cull()
+        # globs the entire cache directory on *every* set() before its
+        # early return, and expired files are only reclaimed by a cull or a
+        # read. Measured glob cost per set(): 0.25 ms at 300 files, 1.6 ms at
+        # 2000, 4.0 ms at 5000, 17 ms at 20000 — against roughly 2.4 ms of
+        # total local CPU per request. 2000 buys ~6.7x the default headroom
+        # (far more distinct client IPs than this service sees in the 60 s
+        # throttle window) while keeping the per-request cost below the work
+        # the request was already doing. Cull gently when it is reached.
         'OPTIONS': {
-            'MAX_ENTRIES': 20000,
-            'CULL_FREQUENCY': 20,
+            'MAX_ENTRIES': 2000,
+            'CULL_FREQUENCY': 10,
         },
     }
 }
