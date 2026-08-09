@@ -4,9 +4,10 @@
 # Runs gunicorn directly — Whitenoise serves the collected static files
 # from inside the same process, so there is no separate web server.
 #
-# Signing keys are NOT baked in. They must be mounted at runtime via
-# SKEY_PATH / VKEY_PATH (e.g. DO App Platform secret files at /run/...,
-# or a mounted volume). The ApiConfig.ready() check at startup will
+# Signing keys are NOT baked in. On App Platform they arrive as encrypted
+# env vars (SKEY_CONTENTS / VKEY_CONTENTS) which the entrypoint materializes
+# under /run/keys; that platform offers neither secret files nor volumes. On
+# runtimes that do provide a mount, point SKEY_PATH / VKEY_PATH at it, or a mounted volume). The ApiConfig.ready() check at startup will
 # refuse to boot if they are missing.
 
 FROM python:3.12-slim AS runtime
@@ -24,7 +25,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # libsodium isn't strictly required (PyNaCl bundles its own), but build-essential
 # would only be needed if a wheel were missing — every dep in requirements.txt
 # ships manylinux wheels for cpython 3.12, so we can skip the toolchain.
-# curl stays in the image for the health check / smoke test.
+# curl stays in the image for manual diagnosis from inside a container.
+# App Platform probes /healthz over HTTP from its own router, so it does not
+# need curl present.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
@@ -79,7 +82,9 @@ EXPOSE 8080
 
 # Entrypoint materializes SKEY_CONTENTS / VKEY_CONTENTS env vars on the
 # container's ephemeral writable layer at /run/keys before exec'ing gunicorn.
-# Mount /run/keys as tmpfs when memory-backed key storage is required.
+# On a runtime that supports it, mount /run/keys as tmpfs for memory-backed
+# key storage. App Platform does not; its filesystem is ephemeral but
+# disk-backed, and is wiped on every deploy.
 # Operators using a mounted volume for keys can leave those env vars unset;
 # gunicorn then reads whatever SKEY_PATH / VKEY_PATH point to.
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

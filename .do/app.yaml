@@ -68,15 +68,18 @@ services:
 
     http_port: 8080
 
-    # /healthz is unthrottled, returns 503 if signing keys become
-    # unreadable, and 200 otherwise. App Platform routes traffic to the
-    # instance only once this returns 200.
-    # /healthz cryptographically checks the current signing identity. Under
-    # transient I/O slowness or while a
-    # worker is mid-Koios-call, a 3s probe timeout is easy to miss and
-    # produces spurious instance replacements (which themselves cause
-    # 504s during the swap window). Loosen both the timeout and the
-    # failure threshold so we only act on sustained unhealthiness.
+    # /healthz is unthrottled and never calls the evaluator. It returns 503
+    # when the signing key, verification key and PKH are not one consistent
+    # identity, or when the throttle cache is unwritable — both conditions
+    # that would otherwise 500 every collateral request while the instance
+    # looked healthy. App Platform routes traffic here only once it returns 200.
+    #
+    # The probe re-derives the signing identity cryptographically on every
+    # call, so under transient I/O slowness — or while a worker is mid-Koios
+    # call — a tight timeout is easy to miss, and a spurious instance
+    # replacement causes 504s during the swap window. The timeout and failure
+    # threshold below are deliberately loose so only sustained unhealthiness
+    # triggers a replacement.
     health_check:
       http_path: /healthz
       initial_delay_seconds: 10
@@ -110,8 +113,9 @@ services:
       # by YAML as a mapping.) The entrypoint wraps cborHex in the minimal key
       # envelope, writes it to /run/keys/ at boot, and points SKEY_PATH /
       # VKEY_PATH there.
-      # If you'd rather mount a volume, leave these empty and set
-      # SKEY_PATH / VKEY_PATH directly to point into the volume mount.
+      # App Platform has no volumes, so encrypted env vars are the only
+      # way in. SKEY_PATH / VKEY_PATH remain available for platforms that do
+      # offer a mount.
       - key: SKEY_CONTENTS
         scope: RUN_TIME
         type: SECRET
@@ -167,8 +171,11 @@ services:
       # different sink.
       - key: LOG_LEVEL
         value: INFO
+      # Per SOURCE IP, so an integrator proxying its users spends the whole
+      # budget from one address. 60/min capped a whole wallet backend at one
+      # request per second, which is why the code default is now 300/min.
       - key: COLLATERAL_THROTTLE_RATE
-        value: 60/min
+        value: 300/min
 
       # /metrics is off by default. Turn it on only if you have a
       # scraper IP to allowlist; leaving it off keeps the URL 404'd.
@@ -177,27 +184,27 @@ services:
       # - key: METRICS_ALLOW_IPS
       #   value: 127.0.0.1,::1,YOUR_SCRAPER_IP
 
-      # --- Hot-reloadable data files ---
-      # bans.json and known.hosts.json default to in-image paths, which
-      # means edits require a redeploy. To keep the hot-reload property,
-      # uncomment the volume below and the two PATH overrides:
-      # - key: BANS_PATH
-      #   value: /data/bans.json
-      # - key: KNOWN_HOSTS_PATH
-      #   value: /data/known.hosts.json
-
-# Persistent volume for hot-reloadable config.
-#
-# DO App Platform volumes survive deploys. Mount one at /data/, edit
-# bans.json / known.hosts.json via `doctl apps console` (or by re-
-# uploading the spec with new values), and the running service will
-# pick up the changes on the next request — no restart needed.
-#
-# Skip the entire block if you're OK redeploying to change bans/hosts.
-# volumes:
-#   - name: data
-#     mount_path: /data
-#     size_gib: 1
+      # --- Hot-reloadable data files: NOT hot-reloadable here ---
+      # The service re-reads bans.json and known.hosts.json whenever their
+      # (mtime_ns, size, inode) changes, so elsewhere an operator can edit a
+      # file and have it take effect on the next request. That property does
+      # not survive App Platform.
+      #
+      # App Platform has no volumes and its filesystem is ephemeral — it is
+      # wiped on every deploy and container replacement, and the app spec has
+      # no mount field. DigitalOcean documents Spaces or a managed database as
+      # the only durable storage. So:
+      #
+      #   known.hosts.json  is baked into the image; changing it means
+      #                     committing and merging, which is itself a deploy.
+      #   bans.json         is NOT in the image at all — it is gitignored and
+      #                     excluded by .dockerignore, so the default
+      #                     BANS_PATH points at a file that never exists and
+      #                     the ban list is permanently empty.
+      #
+      # If you need working bans, either bake a bans.json into the image (drop
+      # it from .dockerignore) or run the self-hosted deployment, where the
+      # operator-editable file works as designed.
 
 # Add a custom domain here once it's verified in the App Platform UI.
 # domains:

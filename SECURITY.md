@@ -76,9 +76,17 @@ enacts, so there is always advance notice.
 1. Watch for a ratified `HardForkInitiation` on each network you serve.
 2. Before the enactment epoch boundary, spend the advertised collateral UTxO
    back to the same provider address, creating a new `txid#ix`.
-3. Update `*_TXID` / `*_TXIDX` in the environment file, update
-   `known.hosts.json`, and restart the service.
-4. Confirm `/healthz` is green and the landing page shows the new reference.
+3. Update `*_TXID` / `*_TXIDX` wherever this deployment holds configuration.
+   On DigitalOcean App Platform that means editing the **live** spec
+   (`doctl apps spec get <app-id>` → edit → `doctl apps update`), which rolls
+   a new container automatically; there is no environment file and nothing to
+   restart by hand. On a self-hosted host it means
+   `/etc/collateral-provider/environment` plus
+   `systemctl restart collateral-provider.service`.
+4. Update `known.hosts.json`. Note this file is baked into the image on App
+   Platform, so publishing the new reference is a commit and a deploy, not an
+   edit in place — sequence it so the advertised UTxO is never stale for long.
+5. Confirm `/healthz` is green and the landing page shows the new reference.
 
 Spending the old UTxO makes every outstanding witness that references it
 phase-1 invalid via `BadInputsUTxO`, so no signature issued before the fork can
@@ -99,8 +107,13 @@ in the security sense. Operators are expected to deploy a recent commit.
 
 If you're running this service:
 
-- [ ] Keep `payment.skey` outside the repo on production hosts; configure
-      `SKEY_PATH` via the `.env` file to point at it.
+- [ ] Never let signing keys reach the repo or a container image. How they
+      are supplied depends on the deployment: App Platform injects them as
+      encrypted `SKEY_CONTENTS` / `VKEY_CONTENTS` env vars that the entrypoint
+      materializes under `/run/keys`, while a self-hosted host keeps them
+      outside the checkout and points `SKEY_PATH` / `VKEY_PATH` at them. A
+      `.env` file is a local-development convenience only; production reads
+      process environment variables.
 - [ ] Use a dedicated payment key controlling exactly the advertised
       collateral UTxO. Never receive ordinary funds at, or reuse the key hash
       for, another payment address, stake credential, native policy, or

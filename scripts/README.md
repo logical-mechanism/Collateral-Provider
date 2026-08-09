@@ -5,7 +5,7 @@ Examples of calling the collateral endpoint, plus the load-test harness.
 | Path | What it does |
 | --- | --- |
 | [`bash/query.sh`](bash/query.sh) | Minimal `curl` request against a provider. |
-| [`py/query.py`](py/query.py) | `collat_witness(tx_cbor, network)` — a plain `requests` call returning the witness. Edit the host constant before use; it takes no command-line arguments. |
+| [`py/query.py`](py/query.py) | `python3 py/query.py <preprod\|mainnet> <tx-cbor-hex>` — one request, prints the witness. The provider URL is built inside `collat_witness` and defaults to the live `www.giveme.my`; change it before pointing this anywhere else. |
 | [`stress_test/locustfile.py`](stress_test/locustfile.py) | Locust user driving `POST /<network>/collateral/`. |
 
 ## Load testing

@@ -7,7 +7,7 @@
 # is workflow_dispatch-only, so it never fires on its own, and it does nothing
 # at all unless a `production` environment is configured with DEPLOY_HOST,
 # DEPLOY_PORT, DEPLOY_USER, PUBLIC_HEALTH_URL and the two SSH secrets.
-name: Deploy production
+name: Deploy self-hosted (Ubuntu)
 
 on:
   workflow_dispatch:

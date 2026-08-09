@@ -58,15 +58,15 @@ HTTP contract:
   per logger, eliminating duplicate and error-only console records.
 - **Container-platform deploy shape.** [`Dockerfile`](Dockerfile),
   [`docker-entrypoint.sh`](docker-entrypoint.sh), and
-  [`.do/app.yaml`](.do/app.yaml) provide an optional DigitalOcean App
-  Platform deploy template. It tracks reviewed `production` code with
-  push-triggered deploys disabled, avoiding a second automatic production
-  path alongside the Ubuntu workflow. Signing keys enter the
-  runtime via `SKEY_CONTENTS` / `VKEY_CONTENTS` SECRET env vars (or a
-  mounted volume); the entrypoint materializes them to `/run/keys/` on the
-  container's ephemeral writable layer before exec'ing gunicorn so the
-  existing `ApiConfig.ready()` signing-key check is satisfied. Operators may
-  mount that path as tmpfs when supported. Operator runbook in
+  [`.do/app.yaml`](.do/app.yaml) describe the DigitalOcean App Platform
+  deployment, which is what the reference provider runs: App Platform builds
+  the image and deploys on every push to the tracked branch. Signing keys
+  enter the runtime via `SKEY_CONTENTS` / `VKEY_CONTENTS` SECRET env vars;
+  the entrypoint materializes them to `/run/keys/` on the container's
+  ephemeral writable layer before exec'ing gunicorn, so the existing
+  `ApiConfig.ready()` signing-key check is satisfied. App Platform supports
+  neither volumes nor tmpfs mounts, so encrypted env vars are the only key
+  delivery mechanism there. Operator runbook in
   [`docs/DEPLOY.md`](docs/DEPLOY.md).
 - **`whitenoise`** dependency for in-process static-file serving so
   the deployed container needs no separate web server. Picked the
@@ -84,10 +84,11 @@ HTTP contract:
   serving regressions the unit tests can't.
 - **Dependabot config** for `pip` and `github-actions` ecosystems.
   Weekly schedule, security updates grouped.
-- **Manual Ubuntu production deployment.** A `workflow_dispatch`-only GitHub
-  workflow reruns CI for the selected `production` commit, streams that exact
-  Git archive over pinned native OpenSSH, and performs a public readiness
-  smoke test. The server helper installs an immutable versioned release,
+- **Self-hosted Ubuntu deployment path.** A `workflow_dispatch`-only GitHub
+  workflow reruns CI for the selected commit, streams that exact Git archive
+  over pinned native OpenSSH, and performs a public readiness smoke test.
+  This is for operators running their own host; it is not how the reference
+  provider deploys. The server helper installs an immutable versioned release,
   atomically switches `current`, restarts the systemd service, and rolls back
   on failed local readiness. Application configuration and signing keys remain
   only on the server.
@@ -117,8 +118,10 @@ HTTP contract:
 - **A request without `Content-Length` returns 411.** Django bounds the
   request stream by that header, so a chunked body read as empty and the
   caller was told `Missing required field: 'tx'` for a request they had sent
-  correctly. The shipped nginx buffers request bodies, so this affects only
-  direct-to-gunicorn callers.
+  correctly. Note the reference deployment runs gunicorn behind DigitalOcean's
+  router with no nginx of our own, so this can be reached there; the nginx
+  template shipped for self-hosters sets `proxy_request_buffering on` and
+  therefore hides it.
 - **Default per-IP throttle raised from `60/min` to `300/min`**, and the
   throttle cache no longer discards counters. Django's `FileBasedCache`
   defaults (`MAX_ENTRIES=300`, `CULL_FREQUENCY=3`) deleted a random third of
@@ -135,7 +138,10 @@ HTTP contract:
 - **The systemd unit provides a writable `CACHE_DIR` by default** via
   `CacheDirectory=`, declared before `EnvironmentFile=` so an operator setting
   still wins. `docs/UBUNTU_DEPLOY.md` additionally documents `BANS_PATH`,
-  without which the ban list silently never loads on the canonical deploy.
+  without which the ban list silently never loads on a self-hosted install.
+  On App Platform the ban list never loads at all: `bans.json` is gitignored
+  and excluded by `.dockerignore`, and the platform has no persistent volume
+  to supply one.
 - Caller-supplied `additional_utxos` can no longer be enabled or forwarded.
   Missing and empty values remain harmless compatibility inputs; every
   non-empty value returns 400. A future parent reference cannot authenticate

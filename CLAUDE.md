@@ -46,6 +46,9 @@ GET  /api/{schema,docs,redoc}/                                          -> OpenA
   - [collateral_provider/sample.env](collateral_provider/sample.env) — copy to `.env` and fill in
 - [known.hosts.json](known.hosts.json) — validated public registry keyed by 28-byte collateral PKH; each 32-byte public key must derive its PKH and each network maps to an HTTPS `/<network>/collateral/` URL plus canonical UTxO reference
 - [scripts/](scripts/) — helper scripts (curl + python clients, locust stress test)
+- [Dockerfile](Dockerfile) / [docker-entrypoint.sh](docker-entrypoint.sh) — what actually ships: the image App Platform builds, and the entrypoint that materializes signing keys from `SKEY_CONTENTS` / `VKEY_CONTENTS`
+- [.do/app.yaml](.do/app.yaml) — App Platform bootstrap template (NOT the live spec; see Deployment below)
+- [deploy/](deploy/) — self-hosting only: systemd unit, nginx template, sudoers, SSH forced command
 - [.github/workflows/ci.yml](.github/workflows/ci.yml) — CI: ruff, tests, coverage, OpenAPI validate, pip-audit
 - [pyproject.toml](pyproject.toml) — ruff and coverage config
 - [requirements.in](requirements.in) / [requirements-dev.in](requirements-dev.in) — direct deps; `*.txt` files are pip-compile lockfiles

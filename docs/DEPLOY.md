@@ -94,7 +94,7 @@ doctl apps create --spec .do/app.local.yaml
 ```
 
 App Platform will:
-1. Clone the repo at `production`.
+1. Clone the repo at the tracked branch (`main` on the live app).
 2. Build the Docker image from `Dockerfile`.
 3. Boot the container, wait for `/healthz` to return 200, then route
    traffic to it.
@@ -123,8 +123,7 @@ doctl apps update <app-id> --spec .do/app.local.yaml
 # Healthcheck (note: the app's hostname, not your custom domain)
 curl -fsS https://<app-hostname>/healthz
 
-# Real signing request (preprod, with a real preprod tx CBOR).
-# scripts/py/query.py takes no command-line arguments — call it with curl.
+# Real signing request (preprod, with a real preprod tx CBOR)
 curl -fsS -X POST https://<app-hostname>/preprod/collateral/ \
      -H 'Content-Type: application/json' \
      -d '{"tx":"<hex-tx-cbor>"}'
@@ -140,34 +139,44 @@ In the App Platform web console:
 1. Add your domain under **Settings → Domains**.
 2. Update your DNS to the `CNAME` DO provides.
 3. DO provisions a free Let's Encrypt cert.
-4. Add the domain to `ALLOWED_HOSTS` in `.do/app.local.yaml` and apply it with
-   `doctl apps update <app-id> --spec .do/app.local.yaml`.
+4. Add the domain to `ALLOWED_HOSTS` using the pull-edit-apply flow under
+   [Updating env vars](#updating-env-vars). Never include a bare `*` — one
+   wildcard voids every other entry in the list.
 
 ## Day-2 operations
 
 ### Updating env vars
 
-Edit `.do/app.local.yaml`, then:
+**Always edit the live spec, never your local copy.** `.do/app.local.yaml` is
+a snapshot taken when you created the app, and a running app drifts from it —
+this one did, on the deployed branch, the throttle rate, and `ALLOWED_HOSTS`.
+Applying a stale local file silently reverts every change made since.
 
 ```bash
-doctl apps update <app-id> --spec .do/app.local.yaml
+doctl apps spec get <app-id> > /tmp/live.yaml
+$EDITOR /tmp/live.yaml
+doctl apps update <app-id> --spec /tmp/live.yaml
 ```
 
 This triggers a rolling redeploy with the new values. Existing requests
 finish on the old container before traffic shifts.
+
+Values marked SECRET come back from `spec get` as encrypted `EV[1:...]`
+blobs. Leave them untouched and they re-apply unchanged; replace one with
+plaintext to rotate it.
 
 ### Rotating the signing keys
 
 1. Generate a new key pair on a host that's not the App Platform
    instance.
 2. Fund a new collateral UTxO under the new PKH.
-3. Update `SKEY_CONTENTS`, `VKEY_CONTENTS`, `PKH`,
-   `PREPROD_TXID`/`MAINNET_TXID` in `.do/app.local.yaml` simultaneously.
-4. `doctl apps update <app-id> --spec .do/app.local.yaml`. App Platform rolls
-   the new keys in;
-   the old container drains. Brief race window where the listed
-   collateral UTxO doesn't match the listed PKH is unavoidable —
-   schedule rotation off-peak.
+3. Update `SKEY_CONTENTS`, `VKEY_CONTENTS`, `PKH`, and
+   `PREPROD_TXID`/`MAINNET_TXID` together, in the live spec pulled via
+   `doctl apps spec get` — all in one edit, so they apply atomically.
+4. `doctl apps update <app-id> --spec /tmp/live.yaml`. App Platform rolls the
+   new keys in; the old container drains. A brief race window where the
+   advertised collateral UTxO doesn't match the advertised PKH is
+   unavoidable — schedule rotation off-peak.
 
 ### Rolling back
 
@@ -184,32 +193,19 @@ Or in the web console: **Activity** → click a previous deploy →
 
 ### Editing the ban list / known-hosts registry
 
-Two paths, depending on whether you opted into the persistent volume in
-`.do/app.local.yaml`:
+**App Platform does not support volumes.** Its filesystem is ephemeral and is
+wiped on every deploy and container replacement, and the app spec has no mount
+or volume field — DigitalOcean documents external storage (Spaces, a managed
+database) as the only durable option. So the hot-reload property these files
+have elsewhere does not exist here:
 
-- **Default (no volume).** `known.hosts.json` lives inside the image. Edit it
-  in the repo and merge to the deployed branch — with `deploy_on_push: true`
-  that rolls out on its own, so a registry edit is a production release like
-  any other. If autodeploy is off, trigger one explicitly:
-  ```bash
-  doctl apps create-deployment <app-id>
-  ```
-  Note that `bans.json` is **not** shipped in the image — it is gitignored and
-  excluded by `.dockerignore`, so without a volume (or a `BANS_PATH` pointing
-  somewhere writable) the ban list is permanently empty. This also means the
-  documented hot-reload property does not hold in the default configuration:
-  both files are baked in, so picking up a change requires a redeploy.
-
-- **With volume.** Files live on the mounted `/data/` volume.
-  ```bash
-  doctl apps console <app-id> -c web
-  $ vi /data/bans.json
-  $ exit
-  ```
-  Use an atomic write-temp-then-rename update. The next request detects the
-  file's `(mtime_ns, size, inode)` identity and reloads it even if its timestamp
-  is equal or older. Invalid JSON/schema updates retain the last valid data;
-  no restart is required.
+- `known.hosts.json` is baked into the image. Editing it means committing and
+  merging to the deployed branch, which is itself a release.
+- `bans.json` is **never present at all**. It is gitignored and excluded by
+  `.dockerignore`, so `BANS_PATH` points at a file that does not exist and the
+  ban list is permanently empty. If you need bans on App Platform, either bake
+  a `bans.json` into the image by removing it from `.dockerignore`, or run the
+  self-hosted deployment where the operator-editable file works as designed.
 
 ### Scraping `/metrics`
 
@@ -248,8 +244,8 @@ The current spec runs one `basic-xxs` instance. To scale:
     staticfiles/                       collected by collectstatic at build
     api/
       key/                             EMPTY — keys land at /run/keys/
-    bans.json                          baked into image (or /data/bans.json)
-    known.hosts.json (parent dir)      baked into image (or /data/known.hosts.json)
+    bans.json                          NOT PRESENT (gitignored + dockerignored)
+    known.hosts.json (parent dir)      baked into image; edit = commit + deploy
 /run/keys/                             ephemeral writable layer, populated by entrypoint
   payment.skey                         from $SKEY_CONTENTS
   payment.vkey                         from $VKEY_CONTENTS
