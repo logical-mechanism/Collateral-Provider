@@ -29,7 +29,14 @@ GET  /api/{schema,docs,redoc}/                                          -> OpenA
     - [signature.py](collateral_provider/api/signature.py) — Ed25519 via PyNaCl, exact-byte tx hashing, witness CBOR, stat-identity-aware key cache
     - [script_integrity.py](collateral_provider/api/script_integrity.py) — verifies body field 11 against exact redeemer/datum bytes and current language views
     - [simulate.py](collateral_provider/api/simulate.py) — queries protocol parameters and calls Koios/Ogmios `evaluateTransaction`; URL per env from `settings.ENVIRONMENTS[<env>]['KOIOS_URL']`
-    - [middleware.py](collateral_provider/api/middleware.py) — `RequestIDMiddleware` + `RequestIDLogFilter`
+    - [services/collateral.py](collateral_provider/api/services/collateral.py) — `issue_witness`, the validation pipeline below
+    - [middleware.py](collateral_provider/api/middleware.py) — `RequestIDMiddleware`, `RequestIDLogFilter`, `RequestBodyLimitMiddleware`, `MetricsMiddleware`
+    - [health.py](collateral_provider/api/health.py) — `readiness_problems()` behind `/healthz`: signing identity plus a throttle-cache round trip
+    - [known_hosts.py](collateral_provider/api/known_hosts.py) — registry schema validation for `known.hosts.json`
+    - [data_files.py](collateral_provider/api/data_files.py) — `MtimeReloadingJson`, the stat-identity hot reloader
+    - [negotiation.py](collateral_provider/api/negotiation.py) — pins responses to JSON regardless of `Accept`
+    - [metrics.py](collateral_provider/api/metrics.py) — Prometheus counters/histograms (per-process; see gotchas)
+    - [log_format.py](collateral_provider/api/log_format.py) — `build_logging_config`, text or JSON lines
     - [tx_fields.py](collateral_provider/api/tx_fields.py) — Cardano body-field index constants and `SET_TAG = 258`
     - [ban_list.py](collateral_provider/api/ban_list.py) — banned addresses + IPs
     - [util.py](collateral_provider/api/util.py) — `raise_validation_error` and `normalize_error_response` (DRF exception handler)
@@ -39,7 +46,6 @@ GET  /api/{schema,docs,redoc}/                                          -> OpenA
   - [collateral_provider/sample.env](collateral_provider/sample.env) — copy to `.env` and fill in
 - [known.hosts.json](known.hosts.json) — validated public registry keyed by 28-byte collateral PKH; each 32-byte public key must derive its PKH and each network maps to an HTTPS `/<network>/collateral/` URL plus canonical UTxO reference
 - [scripts/](scripts/) — helper scripts (curl + python clients, locust stress test)
-- [guides/](guides/) — server setup notes
 - [.github/workflows/ci.yml](.github/workflows/ci.yml) — CI: ruff, tests, coverage, OpenAPI validate, pip-audit
 - [pyproject.toml](pyproject.toml) — ruff and coverage config
 - [requirements.in](requirements.in) / [requirements-dev.in](requirements-dev.in) — direct deps; `*.txt` files are pip-compile lockfiles
@@ -47,19 +53,23 @@ GET  /api/{schema,docs,redoc}/                                          -> OpenA
 
 ## Request flow (the part Claude needs to know cold)
 
-`POST /<env>/collateral/` → [ProvideCollateralView.post](collateral_provider/api/views.py) →
+`POST /<env>/collateral/` → `RequestBodyLimitMiddleware` (411 without `Content-Length`,
+413 over the cap) → [ProvideCollateralView.post](collateral_provider/api/views.py), which
+rejects an unknown `environment` before anything else → serializer shape check →
 [services.collateral.issue_witness](collateral_provider/api/services/collateral.py) runs these
 free functions in cheap-to-expensive order; the first failure raises and short-circuits the rest:
 
 1. `validators.environment.check_ip_address` — reject banned IPs
 2. `validators.environment.check_environment` — env must be one of `settings.ENVIRONMENTS`
+   (defence in depth; the view already rejected unknown envs, so this never fires over HTTP)
 3. `validators.cbor.check_cbor_hex` — hex-decodable, ≤ 16 KiB
 4. `validators.cbor.check_tx_body` — top-level CBOR is `[body, witnesses, valid_bool, aux]`; `valid_bool` must be True
 5. `validators.cbor.check_inputs` — collateral UTxO must NOT be in inputs (would spend it)
 6. `validators.cbor.check_outputs` — every output address must not be in `banned_addresses`
 7. `validators.cbor.check_collateral` — `body[13]` MUST contain exactly the configured collateral UTxO
-8. `validators.cbor.check_signers` — our PKH MUST be in `body[14]` (required signers)
-9. `validators.transaction.check_valid_tx` — require redeemers, fetch current
+8. `validators.cbor.check_collateral_return` — if `body[16]` exists it must pay our own payment key hash
+9. `validators.cbor.check_signers` — our PKH MUST be in `body[14]` (required signers)
+10. `validators.transaction.check_valid_tx` — require redeemers, fetch current
    protocol cost models, verify body field 11 commits to the exact submitted
    redeemer/datum bytes, require a correlated non-empty phase-2 result for the
    exact same pointers, and require committed execution units at least as large
@@ -77,25 +87,51 @@ misleads the user about whether their tx is bad.
 ## Cardano CBOR conventions used here
 
 The provider witness signs only the body bytes. The outer `is_valid` flag and
-witness set are mutable without changing the transaction ID; the ledger checks
-that the flag agrees with phase-2 execution. Do not describe the local
-`is_valid=true` check as cryptographically binding. The public contract does
-not require CIP-40 collateral return/total-collateral fields. A dedicated key
-controlling only the advertised UTxO is therefore a mandatory operator
-invariant.
+witness set are mutable without changing the transaction ID. The ledger checks
+that the flag agrees with phase-2 execution **in both directions** — claiming
+invalid when the scripts pass raises `ValidationTagMismatch PassedUnexpectedly`
+and claiming valid when they fail raises `FailedUnexpectedly`; both are phase-1
+predicate failures, so the transaction is rejected rather than included. The
+local `is_valid=true` check is therefore UX and defence in depth, not the
+control protecting the collateral. Do not describe it as cryptographically
+binding.
+
+Collateral is consumed only when a transaction is included with
+`is_valid=false` and `evalPlutusScripts` genuinely fails. Every other failure
+mode — stale script-data hash, swapped scripts, a spent input or reference
+input, an expired validity interval, a native-script failure, a time-translation
+error — is phase 1, meaning rejection with the collateral untouched. Phase-2
+evaluation is a pure function of the script, its arguments, the committed
+execution units, the cost models, the transaction context, and the major
+protocol version; the first five are pinned by the signature or by field 11,
+and the sixth is not pinned by anything. That is why SECURITY.md requires
+rotating the collateral UTxO before every hard fork.
+
+A dedicated key controlling only the advertised UTxO remains a mandatory
+operator invariant: the witness authorizes the whole body, and fields 4, 5, 9,
+19 and 20 are never inspected.
 
 Transaction body field indices (Conway era) referenced by the validators:
 
-| idx | meaning              |
-|-----|----------------------|
-| 0   | inputs (set)         |
-| 1   | outputs (list)       |
-| 4   | certificates         |
-| 11  | script data hash     |
-| 13  | collateral inputs    |
-| 14  | required signers     |
-| 18  | reference inputs     |
-| 20  | proposal procedures  |
+| idx | meaning              | read by                          |
+|-----|----------------------|----------------------------------|
+| 0   | inputs (set)         | `validators.cbor.check_inputs`   |
+| 1   | outputs (list)       | `validators.cbor.check_outputs`  |
+| 11  | script data hash     | `script_integrity`               |
+| 13  | collateral inputs    | `validators.cbor.check_collateral` |
+| 14  | required signers     | `validators.cbor.check_signers`  |
+| 16  | collateral return    | `validators.cbor.check_collateral_return` |
+
+That is the complete set. Every other body field — notably 4 (certificates),
+5 (withdrawals), 9 (mint), 18 (reference inputs), 19/20 (voting and proposal
+procedures) — is signed and **not** inspected. That is why the dedicated-key
+invariant below is mandatory rather than advisory.
+
+Set-typed fields accept both Conway encodings. `set<a0> = #6.258([* a0]) /
+[* a0]`, and cbor2 yields a `set` of tuples for the tagged form but a `list`
+of lists for the untagged one, so `validators.cbor._set_items` normalizes the
+container *and* its entries. Never gate on `isinstance(x, set)` alone — that
+rejects a legal encoding and breaks builders that omit tag 258.
 
 The witness CBOR returned is `cbor([0, [pubkey_bytes, signature_bytes]])` — Cardano's vkey-witness shape.
 
@@ -117,13 +153,13 @@ identity/network values still fail loudly when absent.
 
 - **Request correlation:** every request gets a 12-char hex `X-Request-ID` (or echoes a safe client-supplied ID of up to 64 ASCII letters, digits, `.`, `_`, `:`, and `-`). Unsafe values are replaced. The ID is set on a `contextvars.ContextVar` by [middleware.RequestIDMiddleware](collateral_provider/api/middleware.py) and pulled onto every log record by `RequestIDLogFilter`. Log lines emitted outside any request show `[-]` in the request_id slot.
 - **Health checks:** `GET /livez` is pure process liveness. `GET /healthz` is signing readiness and cryptographically revalidates the current skey/vkey/PKH, catching broken hot rotations. Neither calls Koios or inherits throttling. `known.hosts.json` is presentation data, not a signing dependency.
-- **Throttling:** `ProvideCollateralThrottle` extends `AnonRateThrottle` and reads `settings.COLLATERAL_THROTTLE_RATE` (default `60/min`). The cache backend is file-based (`django.core.cache.backends.filebased.FileBasedCache`) so multi-worker gunicorn shares the count.
+- **Throttling:** `ProvideCollateralThrottle` extends `AnonRateThrottle` and reads `settings.COLLATERAL_THROTTLE_RATE` (default `300/min`). The cache backend is file-based (`django.core.cache.backends.filebased.FileBasedCache`) so multi-worker gunicorn shares the count. `OPTIONS` raises `MAX_ENTRIES` to 20000 — Django's default of 300 would delete a random third of the throttle counters on every write once that many client IPs were seen. The key is one source IP, so a proxying integrator spends the whole budget from one address.
 - **Error shape:** every error body is `{"detail": <string>}`. The flattening lives in `api.util.normalize_error_response`, wired via `REST_FRAMEWORK['EXCEPTION_HANDLER']`. A view returning `Response(serializer.errors, ...)` directly would bypass it — use `is_valid(raise_exception=True)`.
 
 ## Gotchas / non-obvious things
 
 - **DB is `:memory:`.** [settings.py](collateral_provider/collateral_provider/settings.py) hardcodes sqlite in-memory. There are no migrations or models in this app — Django's ORM is effectively unused. If you ever see a stray `db.sqlite3` it's from `manage.py` commands defaulting to file-based; it's gitignored.
-- **No native CSRF/auth.** It's an open POST API. Throttling is the only abuse control: `ProvideCollateralThrottle` (default `60/min` per IP, env-overridable via `COLLATERAL_THROTTLE_RATE`).
+- **No native CSRF/auth.** It's an open POST API. Throttling is the only abuse control: `ProvideCollateralThrottle` (default `300/min` per IP, env-overridable via `COLLATERAL_THROTTLE_RATE`). `CORS_ALLOW_ALL_ORIGINS = True` means any web page can make its visitors call the endpoint, so the throttle is per-visitor-IP in that case, not per-origin.
 - **Koios/Ogmios is the only upstream.** [simulate.py](collateral_provider/api/simulate.py) reads the URL from `settings.ENVIRONMENTS[<env>]['KOIOS_URL']` (defaults to `https://{preprod|api}.koios.rest/api/v1/ogmios`, overridable per network). Evaluation uses a `(5s, 5s)` connect/read timeout; protocol parameters use `(3s, 5s)` and a five-minute cache. Transport, size, JSON-RPC, and schema failures become a 503 — distinct from a correlated transaction-invalid verdict, which becomes 400. The evaluator remains a funds-at-risk trust dependency; mainnet deployments should self-host or independently trust it.
 - **Additional UTxOs are unsupported.** The serializer accepts an omitted or
   empty compatibility field but rejects every non-empty `additional_utxos`.
@@ -137,7 +173,7 @@ identity/network values still fail loudly when absent.
 - **`banned_addresses` matches on raw output bytes hex** (full address bytes), not bech32. When adding a ban, hex-encode the binary address.
 - **Logging writes to `LOG_FILE`** (default `./debug.log`) with rotation (1 MiB × 3). `LOG_TO_CONSOLE=True` switches exclusively to stderr for systemd/journald or containers; it does not instantiate the file handler. All app and Django loggers use the selected destination without propagation duplicates. Every line includes the request ID. Application request records omit raw client IPs; success records also omit the transaction hash, avoiding an operator-side link between network identity and on-chain activity. Outside requests the ID is `-`.
 - **Operator JSON files reload by stat identity.** `bans.json` and `known.hosts.json` cache `(mtime_ns, size, inode)`, not an increasing mtime, so atomic replacements reload even when timestamps are preserved or older. Invalid updates retain the last valid document. The known-hosts validator checks PKH/public-key derivation, network names, UTxO references, and HTTPS endpoint paths before publishing a reload.
-- **Custom DRF exception handler** [util.normalize_error_response](collateral_provider/api/util.py) flattens DRF's `{field: [messages]}` to `{"detail": "<first message>"}`. Returning `Response(serializer.errors, ...)` from a view bypasses it — use `is_valid(raise_exception=True)` so the handler kicks in.
+- **Custom DRF exception handler** [util.normalize_error_response](collateral_provider/api/util.py) flattens DRF's `{field: [messages]}` to `{"detail": "..."}`. For `non_field_errors` and our own validators the message passes through unchanged; for a field-keyed error it folds the field name in (`"tx: ..."`), with special-cased wording for DRF's required/null/blank defaults. Returning `Response(serializer.errors, ...)` from a view bypasses it — use `is_valid(raise_exception=True)` so the handler kicks in. Paths outside DRF have their own handlers: `handler404` (JSON 404 for API callers, redirect for browsers), `handler500`, and `handler400` for `DisallowedHost` — all three emit the same envelope.
 - **/healthz is unthrottled** by `@throttle_classes([])`. New endpoints inherit no global throttle (we deliberately removed `DEFAULT_THROTTLE_CLASSES`), so they must opt in with `throttle_classes` — easier to forget than to mis-set.
 
 ## Branch state

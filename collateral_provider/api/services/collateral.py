@@ -21,6 +21,7 @@ from api.signature import witness_tx_cbor
 from api.validators.cbor import (
     check_cbor_hex,
     check_collateral,
+    check_collateral_return,
     check_inputs,
     check_outputs,
     check_signers,
@@ -64,6 +65,7 @@ def issue_witness(
     check_inputs(body, env_settings)
     check_outputs(body)
     check_collateral(body, env_settings)
+    check_collateral_return(body, settings.PKH)
     check_signers(body, settings.PKH)
 
     # Most expensive check last: it's a remote HTTP call.

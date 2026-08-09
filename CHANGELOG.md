@@ -18,6 +18,29 @@ HTTP contract:
 
 ### Added
 
+- **Both Conway `set` encodings are accepted** for body fields 0, 13 and 14.
+  Conway's CDDL is `set<a0> = #6.258([* a0]) / [* a0]`; cbor2 decodes the
+  tagged form to a `set` of tuples and the untagged form to a `list` of lists,
+  so the previous `isinstance(x, set)` gate rejected a legal encoding and would
+  refuse transactions from any builder that omits tag 258.
+- **`collateral_return` validation.** When body field 16 is present its payment
+  credential must be the provider's own key hash, and script addresses are
+  refused. The field decides who receives the collateral remainder on the
+  phase-2-invalid branch; leaving it unchecked let a third party profit from
+  burning the provider's UTxO. Omitting the field is still allowed.
+- **Readiness covers the throttle cache.** `/healthz` now round-trips the
+  configured cache backend. A deployment whose `CACHE_DIR` is unwritable —
+  the default path sits inside the release tree, which `ProtectSystem=strict`
+  mounts read-only — previously reported healthy, satisfied the deploy
+  script's readiness gate, and then returned 500 on every collateral request.
+- **`handler500` and a JSON `handler400`.** Errors that escape DRF's exception
+  handler, and `DisallowedHost` rejections, now use the same
+  `{"detail": "..."}` envelope as everything else.
+- **Pre-hard-fork rotation runbook** in [SECURITY.md](SECURITY.md). A
+  transaction commits to the cost models through field 11 but cannot commit to
+  the major protocol version, which Plutus uses to select builtin semantics and
+  UPLC decoder bounds. Rotating the advertised collateral UTxO before a fork
+  invalidates every outstanding witness via `BadInputsUTxO`.
 - **Script-execution binding.** Before evaluation, the provider recomputes
   body field 11 from the exact submitted redeemer/datum CBOR bytes and current
   protocol cost models. After evaluation, the returned redeemer pointers must
@@ -71,6 +94,37 @@ HTTP contract:
 
 ### Changed
 
+- **Responses are always JSON.** DRF's browsable-API renderer was active, so a
+  client sending `Accept: text/html` received an HTML page instead of the
+  documented envelope, on success as well as on error. Rendering is now pinned
+  to JSON and content negotiation never returns 406. Parser negotiation is
+  unchanged, so a form-encoded body still gets 415.
+- **A mistyped API path returns a JSON 404** instead of redirecting to the
+  landing page. Because mainstream HTTP clients follow redirects by default,
+  the old behaviour showed integrators a 200 and an HTML body for a request
+  that never reached the endpoint. Browser navigation still redirects home.
+- **A request without `Content-Length` returns 411.** Django bounds the
+  request stream by that header, so a chunked body read as empty and the
+  caller was told `Missing required field: 'tx'` for a request they had sent
+  correctly. The shipped nginx buffers request bodies, so this affects only
+  direct-to-gunicorn callers.
+- **Default per-IP throttle raised from `60/min` to `300/min`**, and the
+  throttle cache no longer discards counters. Django's `FileBasedCache`
+  defaults (`MAX_ENTRIES=300`, `CULL_FREQUENCY=3`) deleted a random third of
+  all entries on every write once 300 client IPs had been seen, so the only
+  abuse control degraded under exactly the load it exists to bound. The key is
+  a single source IP, so an integrator proxying its users spends the whole
+  budget from one address — see [docs/WALLET_INTEGRATION.md](docs/WALLET_INTEGRATION.md).
+- **`PKH` and the network TXIDs are canonicalized at settings load.**
+  `bytes.fromhex` tolerates uppercase and whitespace, but every request-time
+  comparison is an exact lowercase match, so an uppercase value produced a
+  service that reported itself healthy and rejected 100% of transactions with
+  a message blaming the caller. A non-hex or wrong-length `PKH` now refuses to
+  start.
+- **The systemd unit provides a writable `CACHE_DIR` by default** via
+  `CacheDirectory=`, declared before `EnvironmentFile=` so an operator setting
+  still wins. `docs/UBUNTU_DEPLOY.md` additionally documents `BANS_PATH`,
+  without which the ban list silently never loads on the canonical deploy.
 - Caller-supplied `additional_utxos` can no longer be enabled or forwarded.
   Missing and empty values remain harmless compatibility inputs; every
   non-empty value returns 400. A future parent reference cannot authenticate

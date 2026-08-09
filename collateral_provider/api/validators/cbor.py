@@ -6,13 +6,57 @@ from django.conf import settings
 from api.ban_list import banned_addresses
 from api.tx_fields import (
     COLLATERAL_INPUTS,
+    COLLATERAL_RETURN,
     INPUTS,
     OUTPUTS,
     REQUIRED_SIGNERS,
+    SET_TAG,
     TX_BODY,
     TX_IS_VALID,
 )
 from api.util import raise_validation_error
+
+
+def _set_items(value) -> list | None:
+    """Normalize a CDDL ``set<T>`` body field into a list of entries.
+
+    Conway permits both encodings — ``set<a0> = #6.258([* a0]) / [* a0]``
+    (eras/conway/impl/cddl/data/conway.cddl). cbor2 decodes the tagged form
+    to a Python ``set`` (turning nested arrays into tuples) and the untagged
+    form to a ``list`` of ``list``s. Gating on ``isinstance(x, set)`` alone
+    therefore rejects a legal encoding, so normalize the container *and* its
+    entries here and let every caller work against one shape.
+
+    Entries are de-duplicated so the untagged form carries the same semantics
+    as the tagged one, where the decoder collapses duplicates for us.
+
+    Returns ``None`` when the value is neither encoding.
+    """
+    if isinstance(value, cbor2.CBORTag):
+        if value.tag != SET_TAG:
+            return None
+        value = value.value
+    if isinstance(value, (set, frozenset)):
+        entries = list(value)
+    elif isinstance(value, list):
+        entries = value
+    else:
+        return None
+
+    normalized: list = []
+    seen: set = set()
+    for entry in entries:
+        item = tuple(entry) if isinstance(entry, list) else entry
+        try:
+            if item in seen:
+                continue
+            seen.add(item)
+        except TypeError:
+            # Unhashable entry — keep it so the shape check below rejects it
+            # with a specific message instead of failing here.
+            pass
+        normalized.append(item)
+    return normalized
 
 
 def check_cbor_hex(tx_body_cbor: str) -> bytes:
@@ -68,8 +112,8 @@ def check_inputs(body: dict, env_settings: dict) -> None:
     that would consume it instead of just locking it as collateral."""
     if INPUTS not in body:
         raise_validation_error("Inputs Does Not Exist In Body")
-    inputs = body[INPUTS]
-    if not isinstance(inputs, set):
+    inputs = _set_items(body[INPUTS])
+    if inputs is None:
         raise_validation_error("Inputs Are Not A Set")
 
     expected_txid = env_settings["TXID"]
@@ -111,8 +155,8 @@ def check_collateral(body: dict, env_settings: dict) -> None:
     collateral_inputs set."""
     if COLLATERAL_INPUTS not in body:
         raise_validation_error("Collateral Does Not Exist In Body")
-    collaterals = body[COLLATERAL_INPUTS]
-    if not isinstance(collaterals, set):
+    collaterals = _set_items(body[COLLATERAL_INPUTS])
+    if collaterals is None:
         raise_validation_error("Collateral Is Not A Set")
     if len(collaterals) != 1:
         raise_validation_error("Exactly One Collateral Input Is Required")
@@ -126,13 +170,47 @@ def check_collateral(body: dict, env_settings: dict) -> None:
     raise_validation_error("Collateral Is Not Being Used In Tx")
 
 
+def check_collateral_return(body: dict, pkh: str) -> None:
+    """If the tx sets CIP-40 collateral return, require it to pay us back.
+
+    Body field 16 is consulted by the ledger only on the phase-2-invalid
+    branch, so it cannot make a script fail and is not itself a route to
+    losing the collateral. What it decides is *who receives the remainder*
+    when the collateral is consumed. Left unchecked, an attacker names their
+    own address and keeps roughly the collateral minus the covered fee, which
+    turns a break-even griefing attack into a profitable one.
+
+    The field stays optional so builders that omit it are unaffected. When
+    present, the payment credential must be this provider's key hash.
+
+    A Shelley address is ``header || payment_credential[28] || ...``. The
+    high nibble of the header selects the address type; even types carry a
+    key-hash payment credential, odd types a script hash.
+    """
+    if COLLATERAL_RETURN not in body:
+        return
+    utxo = body[COLLATERAL_RETURN]
+    if not isinstance(utxo, (list, dict)):
+        raise_validation_error("Collateral Return Is Not A List Or Dict")
+    try:
+        address = utxo[0]
+    except (IndexError, KeyError):
+        raise_validation_error("Collateral Return Has No Address")
+    if not isinstance(address, bytes) or len(address) < 29:
+        raise_validation_error("Collateral Return Address Is Malformed")
+    if (address[0] >> 4) % 2 != 0:
+        raise_validation_error("Collateral Return Must Not Pay A Script Address")
+    if address[1:29].hex() != pkh:
+        raise_validation_error("Collateral Return Must Pay The Collateral Provider")
+
+
 def check_signers(body: dict, pkh: str) -> None:
     """Require that this provider's PKH is in required_signers — a tx that
     doesn't list us as a signer cannot legitimately consume our witness."""
     if REQUIRED_SIGNERS not in body:
         raise_validation_error("Required Signers Does Not Exist In Body")
-    signers = body[REQUIRED_SIGNERS]
-    if not isinstance(signers, set):
+    signers = _set_items(body[REQUIRED_SIGNERS])
+    if signers is None:
         raise_validation_error("Required Signers Is Not A Set")
 
     for signer in signers:

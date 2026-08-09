@@ -99,8 +99,11 @@ doctl apps update <app-id> --spec .do/app.local.yaml
 # Healthcheck (note: the app's hostname, not your custom domain)
 curl -fsS https://<app-hostname>/healthz
 
-# Real signing request (preprod, with a real preprod tx CBOR)
-python3 scripts/py/query.py preprod <hex-tx-cbor>
+# Real signing request (preprod, with a real preprod tx CBOR).
+# scripts/py/query.py takes no command-line arguments — call it with curl.
+curl -fsS -X POST https://<app-hostname>/preprod/collateral/ \
+     -H 'Content-Type: application/json' \
+     -d '{"tx":"<hex-tx-cbor>"}'
 ```
 
 If `/healthz` returns 503, the signing keys probably didn't materialize
@@ -160,9 +163,12 @@ Or in the web console: **Activity** → click a previous deploy →
 Two paths, depending on whether you opted into the persistent volume in
 `.do/app.local.yaml`:
 
-- **Default (no volume).** `bans.json` and `known.hosts.json` live
-  inside the image. Edit the files in the repo, commit, promote the reviewed
-  commit to `production`, then trigger a deployment explicitly:
+- **Default (no volume).** `known.hosts.json` lives inside the image. Edit it
+  in the repo, commit, promote the reviewed commit to `production`, then
+  trigger a deployment explicitly. Note that `bans.json` is **not** shipped in
+  the image — it is gitignored and excluded by `.dockerignore`, so without a
+  volume (or a `BANS_PATH` pointing somewhere writable) the ban list is
+  permanently empty:
   ```bash
   doctl apps create-deployment <app-id>
   ```

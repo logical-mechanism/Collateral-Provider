@@ -72,7 +72,7 @@ class RequestIDLogFilter(logging.Filter):
 
 # Pattern for the only path we care to measure. Other paths (/, /healthz,
 # /known_hosts/, /api/docs/) are either trivial or scraped infrequently.
-_COLLATERAL_PATH_RE = re.compile(r"^/(?P<env>[^/]+)/collateral/?$")
+COLLATERAL_PATH_RE = re.compile(r"^/(?P<env>[^/]+)/collateral/?$")
 
 
 class RequestBodyLimitMiddleware:
@@ -80,28 +80,41 @@ class RequestBodyLimitMiddleware:
 
     Django's ``DATA_UPLOAD_MAX_MEMORY_SIZE`` does not reliably stop streaming
     parsers before the view, and a missing transfer ``Content-Length`` must not
-    turn that setting into a bypass. Read at most ``limit + 1`` bytes from the
-    WSGI stream, reject overflow, then replay the bounded bytes to DRF.
+    turn that setting into a bypass. Read at most ``limit + 1`` bytes, reject
+    overflow, then replay the bounded bytes to DRF.
+
+    A request with no ``Content-Length`` is answered with 411 rather than
+    being processed. Django bounds ``request`` by that header — with no header
+    the stream yields nothing — so a chunked body would otherwise reach the
+    serializer empty and the caller would be told "Missing required field:
+    'tx'" for a request they sent correctly. Naming the real problem is worth
+    more to an integrator than a misleading 400. The shipped nginx sets
+    ``proxy_request_buffering on``, so it buffers a chunked client request and
+    forwards it with a length; only direct-to-gunicorn callers see this.
     """
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
-        if request.method != "POST" or not _COLLATERAL_PATH_RE.match(request.path):
+        if request.method != "POST" or not COLLATERAL_PATH_RE.match(request.path):
             return self.get_response(request)
 
         limit = settings.DATA_UPLOAD_MAX_MEMORY_SIZE
         raw_length = request.META.get("CONTENT_LENGTH")
-        if raw_length:
-            try:
-                content_length = int(raw_length)
-            except (TypeError, ValueError):
-                return JsonResponse({"detail": "Invalid Content-Length"}, status=400)
-            if content_length < 0:
-                return JsonResponse({"detail": "Invalid Content-Length"}, status=400)
-            if content_length > limit:
-                return JsonResponse({"detail": "Request Body Too Large"}, status=413)
+        if not raw_length:
+            return JsonResponse(
+                {"detail": "Content-Length Header Is Required"},
+                status=411,
+            )
+        try:
+            content_length = int(raw_length)
+        except (TypeError, ValueError):
+            return JsonResponse({"detail": "Invalid Content-Length"}, status=400)
+        if content_length < 0:
+            return JsonResponse({"detail": "Invalid Content-Length"}, status=400)
+        if content_length > limit:
+            return JsonResponse({"detail": "Request Body Too Large"}, status=413)
 
         body = request.read(limit + 1)
         if len(body) > limit:
@@ -126,7 +139,7 @@ class MetricsMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
-        match = _COLLATERAL_PATH_RE.match(request.path)
+        match = COLLATERAL_PATH_RE.match(request.path)
         if not match:
             return self.get_response(request)
 

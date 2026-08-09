@@ -280,3 +280,59 @@ class GetKeyFromFileTestCase(TestCase):
             self.assertEqual(get_key_from_file(path), "22" * 32)
         finally:
             os.unlink(path)
+
+
+class WitnessVerifiesTestCase(TestCase):
+    """Close the loop on the service's one deliverable.
+
+    Existing coverage checks key derivation and the witness CBOR shape
+    separately, but nothing asserted that the signature actually verifies
+    against the body hash under the returned public key. That composition is
+    the entire product: a witness that does not verify is silently useless to
+    every caller, and no other test would notice.
+    """
+
+    def setUp(self):
+        _clear_key_cache()
+        self.addCleanup(_clear_key_cache)
+        self.seed = "11" * 32
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".skey", delete=False) as f:
+            f.write('{"cborHex": "5820' + self.seed + '"}')
+            self.skey_path = f.name
+        self.addCleanup(os.unlink, self.skey_path)
+
+        import hashlib
+
+        from nacl.signing import SigningKey
+
+        self.public_key = bytes(SigningKey(bytes.fromhex(self.seed)).verify_key)
+        self.pkh = hashlib.blake2b(self.public_key, digest_size=28).hexdigest()
+
+    def test_witness_signature_verifies_against_tx_body_hash(self):
+        tx = valid_tx_body_cbor_with_collateral()
+        witness_hex, tx_hash = witness_tx_cbor(tx, self.skey_path, self.pkh)
+
+        tag, (pubkey, signature) = cbor2.loads(bytes.fromhex(witness_hex))
+        self.assertEqual(tag, 0)
+        self.assertEqual(pubkey, self.public_key)
+        self.assertEqual(len(signature), 64)
+
+        # The chain a wallet actually walks: the returned key must be the
+        # advertised identity, and the signature must verify over the hash of
+        # the exact submitted body bytes.
+        self.assertEqual(tx_hash, tx_id(tx))
+        self.assertTrue(verify(pubkey.hex(), signature.hex(), tx_hash))
+
+    def test_witness_does_not_verify_against_a_different_body(self):
+        tx = valid_tx_body_cbor_with_collateral()
+        witness_hex, _ = witness_tx_cbor(tx, self.skey_path, self.pkh)
+        _, (pubkey, signature) = cbor2.loads(bytes.fromhex(witness_hex))
+
+        other_hash = tx_id(invalid_tx_body_missing_collateral())
+        self.assertFalse(verify(pubkey.hex(), signature.hex(), other_hash))
+
+    def test_refuses_to_sign_when_key_does_not_match_configured_pkh(self):
+        with self.assertRaises(ValueError):
+            witness_tx_cbor(
+                valid_tx_body_cbor_with_collateral(), self.skey_path, "ab" * 28
+            )

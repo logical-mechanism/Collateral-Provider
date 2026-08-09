@@ -26,7 +26,29 @@ if os.path.exists(env_file):
 # bundled with the repo (used in dev and tests); production deploys should
 # override SKEY_PATH and VKEY_PATH to point at locations outside the
 # checkout (e.g. /etc/collateral-provider/keys).
-PKH = env('PKH')
+def _canonical_hex(value: str, name: str, expected_bytes: int | None = None) -> str:
+    """Normalize an operator-supplied hex value, or refuse to start.
+
+    Startup validation and /healthz both parse these with ``bytes.fromhex``,
+    which tolerates uppercase and silently skips ASCII whitespace. Every
+    request-time comparison is an exact lowercase string match instead, so an
+    uppercase or space-padded value produced a service that reported itself
+    healthy and then rejected 100% of traffic with a message blaming the
+    caller. Canonicalizing once, here, keeps both paths agreeing.
+    """
+    text = ''.join(value.split()).lower()
+    try:
+        raw = bytes.fromhex(text)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be hexadecimal, got {value!r}") from exc
+    if expected_bytes is not None and len(raw) != expected_bytes:
+        raise RuntimeError(
+            f"{name} must be exactly {expected_bytes} bytes ({expected_bytes * 2} hex characters)"
+        )
+    return text
+
+
+PKH = _canonical_hex(env('PKH'), 'PKH', 28)
 SKEY_PATH = env('SKEY_PATH', default=str(BASE_DIR / 'api' / 'key' / 'payment.skey'))
 VKEY_PATH = env('VKEY_PATH', default=str(BASE_DIR / 'api' / 'key' / 'payment.vkey'))
 SECRET_KEY = env('DJANGO_SECRET_KEY')
@@ -39,7 +61,11 @@ ENVIRONMENT = env('ENVIRONMENT')
 ENVIRONMENTS = {
     'preprod': {
         'NETWORK': env('PREPROD_NETWORK'),
-        'TXID': env('PREPROD_TXID'),
+        # Canonicalized for the same reason as PKH: check_collateral compares
+        # this against utxo[0].hex(), which is always lowercase. Length is not
+        # enforced here so a local dev setup can leave a network blank; apps.py
+        # enforces it for every non-development environment.
+        'TXID': _canonical_hex(env('PREPROD_TXID'), 'PREPROD_TXID'),
         'TXIDX': env.int('PREPROD_TXIDX'),
         'KOIOS_URL': env(
             'PREPROD_KOIOS_URL',
@@ -48,7 +74,7 @@ ENVIRONMENTS = {
     },
     'mainnet': {
         'NETWORK': env('MAINNET_NETWORK'),
-        'TXID': env('MAINNET_TXID'),
+        'TXID': _canonical_hex(env('MAINNET_TXID'), 'MAINNET_TXID'),
         'TXIDX': env.int('MAINNET_TXIDX'),
         'KOIOS_URL': env(
             'MAINNET_KOIOS_URL',
@@ -76,7 +102,15 @@ else:
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Collateral endpoint throttle (per anonymous IP).
-COLLATERAL_THROTTLE_RATE = env('COLLATERAL_THROTTLE_RATE', default='60/min')
+#
+# A wallet backend proxying its users reaches us from a single egress IP, so
+# this rate is that integrator's *entire* budget, not one user's. The former
+# 60/min default capped a whole wallet at one request per second. 300/min
+# leaves room for a real integrator while staying below the service's own
+# upstream ceiling (KOIOS_MAX_IN_FLIGHT * workers, ~8-32 rps depending on
+# evaluator latency), so a single abusive IP still cannot monopolise it.
+# Operators fronting a known partner should raise this further.
+COLLATERAL_THROTTLE_RATE = env('COLLATERAL_THROTTLE_RATE', default='300/min')
 
 # Per-process admission budget for outbound Koios calls. Gunicorn runs two
 # processes, so the default bounds aggregate in-flight upstream calls to about
@@ -172,6 +206,16 @@ CACHES = {
         'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
         'LOCATION': env('CACHE_DIR', default=os.path.join(BASE_DIR, '.cache')),
         'TIMEOUT': 600,
+        # Django's defaults here are MAX_ENTRIES=300 / CULL_FREQUENCY=3, which
+        # means every write past 300 keys deletes a random third of them. Since
+        # each throttled client IP is one key, the only abuse control on this
+        # endpoint would quietly stop counting under exactly the traffic it
+        # exists to bound. Raise the ceiling well above any plausible number of
+        # concurrent source IPs and cull far more gently when it is reached.
+        'OPTIONS': {
+            'MAX_ENTRIES': 20000,
+            'CULL_FREQUENCY': 20,
+        },
     }
 }
 
@@ -208,6 +252,18 @@ REST_FRAMEWORK = {
     'DEFAULT_PARSER_CLASSES': [
         'rest_framework.parsers.JSONParser',
     ],
+    # JSON only, mirroring DEFAULT_PARSER_CLASSES. Without this DRF's default
+    # [JSONRenderer, BrowsableAPIRenderer] applies, and any client sending
+    # `Accept: text/html` — a browser, a curl default, an SDK that forwards the
+    # user's header — receives an HTML page instead of the documented
+    # {"detail": "..."} envelope, on success and error alike.
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ],
+    # With a single renderer, DRF's default negotiation answers 406 to anyone
+    # asking for text/html. Pin JSON instead so the response shape depends on
+    # the endpoint, not on the caller's Accept header.
+    'DEFAULT_CONTENT_NEGOTIATION_CLASS': 'api.negotiation.JSONOnlyContentNegotiation',
 }
 
 # Protocol-adjacent cap. ``MAX_TX_SIZE`` matches the on-chain Conway protocol

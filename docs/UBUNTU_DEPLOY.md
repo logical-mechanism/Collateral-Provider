@@ -137,12 +137,27 @@ MAINNET_NETWORK=--mainnet
 
 SKEY_PATH=/etc/collateral-provider/keys/payment.skey
 VKEY_PATH=/etc/collateral-provider/keys/payment.vkey
-CACHE_DIR=/var/lib/collateral-provider/cache
+BANS_PATH=/etc/collateral-provider/bans.json
 TRUSTED_PROXY_IPS=127.0.0.1,::1
 LOG_TO_CONSOLE=True
 LOG_FORMAT=json
 LOG_LEVEL=INFO
 ```
+
+`CACHE_DIR` is deliberately absent: the unit file sets it to the systemd-managed
+`/var/cache/collateral-provider`, so the throttle has a writable home with no
+operator action. Setting it here still overrides that, but any replacement must
+be writable by the service user — `ProtectSystem=strict` mounts
+`/srv/collateral-provider` read-only, so a path inside the release tree fails.
+`/healthz` round-trips the cache and returns 503 if it cannot, which makes a bad
+value fail the deployment's readiness gate and roll back rather than going live.
+
+`BANS_PATH` matters for the same reason: without it the default lands inside the
+read-only release tree, where the file does not exist, and the address/IP ban
+list silently never loads. Create it (see `bans.json.example`) or accept that
+bans are inactive. `KNOWN_HOSTS_PATH` may be pointed at
+`/etc/collateral-provider/known.hosts.json` if you want to edit the published
+registry without a deploy; otherwise the copy in the release tree is served.
 
 Then lock it down and configure the Host used by the direct-to-gunicorn
 readiness check. It must be present in `ALLOWED_HOSTS`:

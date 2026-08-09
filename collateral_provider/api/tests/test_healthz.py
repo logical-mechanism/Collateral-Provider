@@ -83,3 +83,33 @@ class TestHealthz(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
         self.assertEqual(response["Cache-Control"], "no-store")
+
+
+@override_settings(ALLOWED_HOSTS=["testserver"])
+class ReadinessCoversThrottleCacheTestCase(TestCase):
+    """A broken throttle cache must fail readiness, not just requests.
+
+    CACHE_DIR defaults inside the release tree, which the shipped systemd
+    unit mounts read-only. Before this probe existed, such a deploy passed
+    /healthz, satisfied the deploy script's readiness gate, never rolled
+    back, and then 500'd on every collateral POST.
+    """
+
+    def test_unwritable_cache_reports_unready(self):
+        with override_settings(
+            CACHES={
+                "default": {
+                    "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+                    "LOCATION": "/proc/definitely-not-writable/cache",
+                }
+            }
+        ):
+            response = self.client.get("/healthz")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["status"], "error")
+        self.assertIn("throttle cache", " ".join(response.json()["problems"]))
+
+    def test_healthy_cache_reports_ok(self):
+        response = self.client.get("/healthz")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")

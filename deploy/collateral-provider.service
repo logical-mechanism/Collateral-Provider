@@ -10,6 +10,9 @@ Type=simple
 User=collateral-provider
 Group=collateral-provider
 WorkingDirectory=/srv/collateral-provider/current/collateral_provider
+# Declared before EnvironmentFile so an explicit CACHE_DIR in the operator's
+# environment file still overrides this fallback.
+Environment=CACHE_DIR=/var/cache/collateral-provider
 EnvironmentFile=/etc/collateral-provider/environment
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
@@ -24,6 +27,13 @@ RuntimeDirectory=collateral-provider
 RuntimeDirectoryMode=0750
 StateDirectory=collateral-provider
 StateDirectoryMode=0750
+# systemd creates and owns /var/cache/collateral-provider, so the throttle has
+# a writable home even if the environment file omits CACHE_DIR. Without this
+# the default falls back inside the release tree, which ProtectSystem=strict
+# mounts read-only, and every collateral request 500s.
+CacheDirectory=collateral-provider
+CacheDirectoryMode=0750
+Environment=CACHE_DIR=/var/cache/collateral-provider
 UMask=0027
 
 # The process needs outbound DNS/TCP to reach Koios, read-only access to the

@@ -1,4 +1,5 @@
 import unittest
+from typing import ClassVar
 from unittest.mock import patch
 
 import cbor2
@@ -8,6 +9,7 @@ from api.tests.test_big_data import invalid_tx_body_too_big
 from api.validators.cbor import (
     check_cbor_hex,
     check_collateral,
+    check_collateral_return,
     check_inputs,
     check_outputs,
     check_signers,
@@ -218,3 +220,95 @@ class TestCborValidator(unittest.TestCase):
         with self.assertRaises(ValidationError) as context:
             check_signers(body, "ac24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4")
         self.assertIn("Public Key Hash Is Not Being Used", str(context.exception.detail))
+
+
+class TestUntaggedSetEncoding(unittest.TestCase):
+    """Conway permits both set encodings; we must accept both.
+
+    conway.cddl declares ``set<a0> = #6.258([* a0]) / [* a0]``. cbor2 decodes
+    the tagged form to a Python ``set`` of tuples and the untagged form to a
+    ``list`` of ``list``s, so gating on ``isinstance(x, set)`` silently
+    rejected a legal encoding and would break any builder that omits tag 258.
+    """
+
+    env: ClassVar[dict] = {"TXID": "11" * 32, "TXIDX": 0}
+    pkh = "7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4"
+
+    def test_untagged_inputs_accepted(self):
+        check_inputs({0: [[bytes.fromhex("22" * 32), 0]]}, self.env)
+
+    def test_untagged_collateral_accepted(self):
+        check_collateral({13: [[bytes.fromhex("11" * 32), 0]]}, self.env)
+
+    def test_untagged_signers_accepted(self):
+        check_signers({14: [bytes.fromhex(self.pkh)]}, self.pkh)
+
+    def test_tagged_form_still_accepted(self):
+        check_inputs({0: {(bytes.fromhex("22" * 32), 0)}}, self.env)
+        check_collateral({13: {(bytes.fromhex("11" * 32), 0)}}, self.env)
+
+    def test_explicit_cbor_tag_258_accepted(self):
+        tagged = cbor2.CBORTag(258, [[bytes.fromhex("11" * 32), 0]])
+        check_collateral({13: tagged}, self.env)
+
+    def test_untagged_encoding_still_rejects_spending_the_collateral(self):
+        with self.assertRaises(ValidationError) as context:
+            check_inputs({0: [[bytes.fromhex("11" * 32), 0]]}, self.env)
+        self.assertIn("Collateral Is Being Spent In Tx", str(context.exception.detail))
+
+    def test_untagged_encoding_still_rejects_a_foreign_collateral(self):
+        with self.assertRaises(ValidationError) as context:
+            check_collateral({13: [[bytes.fromhex("99" * 32), 0]]}, self.env)
+        self.assertIn("Collateral Is Not Being Used", str(context.exception.detail))
+
+    def test_untagged_duplicates_collapse_like_the_tagged_form(self):
+        # A tagged set would dedupe these in the decoder; the untagged list
+        # must not therefore trip the "exactly one collateral" rule.
+        entry = [bytes.fromhex("11" * 32), 0]
+        check_collateral({13: [entry, list(entry)]}, self.env)
+
+    def test_non_container_still_rejected(self):
+        for value in (5, "abc", b"abc", None):
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                check_inputs({0: value}, self.env)
+
+
+class TestCollateralReturn(unittest.TestCase):
+    """Body field 16 decides who receives the collateral remainder.
+
+    It cannot make a script fail, so it is not itself a route to losing the
+    collateral — but left unchecked it lets an attacker keep what is burned,
+    turning a break-even griefing attack into a profitable one.
+    """
+
+    pkh = "7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4"
+
+    def test_absent_field_is_allowed(self):
+        check_collateral_return({}, self.pkh)
+
+    def test_return_to_provider_key_address_allowed(self):
+        address = bytes.fromhex("60" + self.pkh)
+        check_collateral_return({16: [address, 1000000]}, self.pkh)
+
+    def test_return_to_attacker_address_rejected(self):
+        address = bytes.fromhex("60" + "aa" * 28)
+        with self.assertRaises(ValidationError) as context:
+            check_collateral_return({16: [address, 1000000]}, self.pkh)
+        self.assertIn("Must Pay The Collateral Provider", str(context.exception.detail))
+
+    def test_return_to_script_address_rejected(self):
+        # Odd address-type nibble means a script payment credential; the
+        # provider key cannot control the funds even if the hash matches.
+        address = bytes.fromhex("70" + self.pkh)
+        with self.assertRaises(ValidationError) as context:
+            check_collateral_return({16: [address, 1000000]}, self.pkh)
+        self.assertIn("Must Not Pay A Script Address", str(context.exception.detail))
+
+    def test_map_encoded_output_is_handled(self):
+        address = bytes.fromhex("60" + self.pkh)
+        check_collateral_return({16: {0: address, 1: 1000000}}, self.pkh)
+
+    def test_malformed_address_rejected(self):
+        for value in (b"", b"\x60\x00", "not-bytes", 5):
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                check_collateral_return({16: [value, 1]}, self.pkh)

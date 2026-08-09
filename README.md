@@ -49,10 +49,20 @@ only for a phase-2-invalid transaction submitted with `is_valid=false`.
 
 To keep wallet integration straightforward, this API does not require CIP-40
 `collateral_return` or `total_collateral` fields. Builders may and are
-encouraged to use them to bound the provider's loss on the invalid branch,
-provided the collateral return goes only to an address controlled by the
-provider key. The provider requires an actual non-empty Plutus evaluation
-before signing.
+encouraged to use them to bound the provider's loss on the invalid branch.
+When `collateral_return` (body field 16) *is* present it is validated: its
+payment credential must be this provider's key hash, and script addresses are
+refused. The field decides who receives the collateral remainder on the
+invalid branch, so leaving it unchecked would let a third party profit from
+burning the provider's UTxO. The provider requires an actual non-empty Plutus
+evaluation before signing.
+
+One residual is not closed by any local check: a transaction commits to the
+cost models through field 11, but nothing commits it to the **major protocol
+version**, and Plutus keys builtin semantics and UPLC decoder strictness on
+that value. Operators must therefore rotate the collateral UTxO before each
+hard fork — see [SECURITY.md](SECURITY.md). Spending the advertised UTxO makes
+every previously issued witness phase-1 invalid.
 
 Non-empty `additional_utxos` is intentionally unsupported and cannot be
 enabled by configuration. A reference to an unsubmitted parent transaction
@@ -124,11 +134,13 @@ Every error from the wallet-facing collateral endpoint uses a single shape:
 { "detail": "<human-readable message>" }
 ```
 
-That includes validation failures (400), method-not-allowed (405), request body
-too large (413), unsupported media type (415), throttling (429), and
-upstream/local signing unavailability (503). Field names from internal
-serializers are not leaked. Auxiliary HTML and observability endpoints have
-their own response formats.
+That includes validation failures (400), unknown API paths (404),
+method-not-allowed (405), missing `Content-Length` (411), request body too
+large (413), unsupported media type (415), throttling (429), and
+upstream/local signing unavailability (503). The shape does not depend on the
+client's `Accept` header — the endpoint always renders JSON. Field names from
+internal serializers are not leaked. Auxiliary HTML and observability
+endpoints have their own response formats.
 
 ## Setup
 
@@ -156,7 +168,11 @@ pip-compile --upgrade --strip-extras requirements-dev.in
 
 The signing identity is validated via `api.apps.ApiConfig.ready`: the signing
 key must derive the configured verification key, which must derive the
-configured PKH. Collateral TXIDs and indices are validated too.
+configured PKH. `PKH` and the network TXIDs are canonicalized to lowercase at
+settings load, so a value pasted in uppercase can no longer produce a service
+that reports itself healthy and then rejects every transaction. Collateral
+TXIDs and indices are additionally length-checked when `ENVIRONMENT` is not
+`development`, so a local setup can leave a network blank.
 
 ## Testing
 
@@ -215,12 +231,12 @@ full list. The most useful overrides:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SKEY_PATH` / `VKEY_PATH` | `api/key/payment.{skey,vkey}` | Move signing keys outside the checkout in production. |
-| `COLLATERAL_THROTTLE_RATE` | `60/min` | Per-IP rate limit for `/<env>/collateral/`. |
+| `COLLATERAL_THROTTLE_RATE` | `300/min` | Per-IP rate limit for `/<env>/collateral/`. A proxying integrator spends this from one address. |
 | `KOIOS_MAX_IN_FLIGHT` | `4` | Per-process outbound Koios admission budget; excess requests fail fast with 503. |
 | `PREPROD_KOIOS_URL` / `MAINNET_KOIOS_URL` | Koios public hosting | Point evaluation at self-hosted Koios or alternate networks. |
 | `LOG_LEVEL` / `LOG_FILE` | `DEBUG`, `./debug.log` | Log severity / rotated-file path when file logging is selected. |
 | `LOG_TO_CONSOLE` | `False` | Send all app and Django logs to stderr instead of opening `LOG_FILE`; use for systemd/journald or containers. |
-| `CACHE_DIR` | `./.cache` | File-based cache directory used by the throttle. |
+| `CACHE_DIR` | `./.cache` | File-based cache directory used by the throttle. Must be writable by the service user; the systemd unit overrides it to `/var/cache/collateral-provider`. |
 
 ## Reporting security issues
 

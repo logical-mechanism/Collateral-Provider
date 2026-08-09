@@ -20,6 +20,7 @@ INPUTS = 0
 OUTPUTS = 1
 COLLATERAL_INPUTS = 13
 REQUIRED_SIGNERS = 14
+COLLATERAL_RETURN = 16
 
 # CBOR tag used to mark canonicalized sets in the Cardano body
 SET_TAG = 258

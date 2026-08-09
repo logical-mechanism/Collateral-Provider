@@ -65,10 +65,19 @@ Before requesting the provider witness:
 6. Complete the body before calling the provider. Any body change afterward
    changes the transaction ID and invalidates the returned signature.
 
-CIP-40 `collateral_return` and `total_collateral` remain optional. Using them is
-recommended because they bound the provider's loss if the transaction is
-legitimately included on its phase-2-invalid branch. Return collateral only to
-an address controlled by the provider key.
+Both CBOR encodings of a `set` are accepted. Conway's CDDL declares
+`set<a0> = #6.258([* a0]) / [* a0]`, so body fields 0, 13 and 14 may be sent
+either wrapped in tag 258 or as plain arrays; builders that omit the tag are
+not rejected.
+
+CIP-40 `collateral_return` (field 16) and `total_collateral` (field 17) remain
+optional. Using them is recommended because they bound the provider's loss if
+the transaction is legitimately included on its phase-2-invalid branch. **If
+field 16 is present it must pay the provider's own payment key hash** — a
+return to any other address, or to a script address, is rejected with 400.
+This is enforced, not merely advised: the field decides who receives the
+collateral remainder, and an unchecked one lets a third party profit from
+burning the provider's UTxO.
 
 ## Chained transactions
 
@@ -121,17 +130,37 @@ transaction through its node.
 
 ## Errors and retries
 
-Every error response is `{"detail":"..."}`.
+Every error response is `{"detail":"..."}`, on every status, regardless of the
+`Accept` header you send. The endpoint always renders JSON.
 
 - `400`: the request or transaction violates the provider contract. Do not
   retry the same bytes unchanged.
+- `404`: wrong path. Note this is a real 404 with a JSON body — check the
+  network segment and the trailing slash rather than following a redirect.
+- `411`: send `Content-Length`. Chunked transfer encoding is not supported on
+  this endpoint; buffer the body and send its length.
 - `413`: the JSON body exceeds the provider's configured byte limit. Do not
   retry the same payload unchanged.
 - `415`: send JSON with `Content-Type: application/json`.
-- `429`: wait and retry with backoff.
+- `429`: wait and retry with backoff. See the rate limit below.
 - `503`: protocol-parameter lookup, phase-2 evaluation, local upstream
   capacity, or the signing identity is temporarily unavailable. Retry with
   jitter or select another provider.
+
+### Rate limit
+
+Requests are throttled **per source IP**, default `300/min`. Read that as your
+whole integration's budget, not one user's: a wallet backend that proxies its
+users reaches the provider from a single egress address, so every user shares
+one counter. Client-side wallets calling from end-user devices get a counter
+each.
+
+A provider's actual sustained ceiling is lower than the throttle and is set by
+its evaluator: roughly `workers * KOIOS_MAX_IN_FLIGHT / evaluator_latency`,
+around 16 requests per second on the reference deployment. Requests beyond that
+are shed as `503`, not queued. If you expect to exceed roughly one request per
+second sustained, agree a rate with the provider operator before going live —
+`COLLATERAL_THROTTLE_RATE` is configurable per deployment.
 
 Every response includes `X-Request-ID`. Supply a safe ID of up to 64 letters,
 digits, `.`, `_`, `:`, or `-` if end-to-end correlation is useful. Application

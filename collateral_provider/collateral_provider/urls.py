@@ -2,6 +2,7 @@ from api.views import (
     ProvideCollateralView,
     custom_disallowed_host_handler,
     custom_page_not_found,
+    custom_server_error,
     healthz_view,
     known_hosts_view,
     landing_page,
@@ -33,3 +34,4 @@ urlpatterns = [
 
 handler404 = custom_page_not_found
 handler400 = custom_disallowed_host_handler
+handler500 = custom_server_error

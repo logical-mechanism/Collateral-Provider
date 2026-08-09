@@ -31,12 +31,64 @@ In scope:
 
 Out of scope:
 
-- Hitting the rate limit. The 60/min/IP limit is documented and intentional.
+- Hitting the rate limit. The per-IP limit (default `300/min`, see
+  `COLLATERAL_THROTTLE_RATE`) is documented and intentional.
 - Reports that depend on running the service with `DEBUG=True` or with secrets
   committed to the repo.
 - Self-XSS on the public landing page (the page is static).
 - Lack of features that aren't part of this project (e.g. no audit logging
   beyond the request-id-correlated app log; no per-tx receipts).
+
+## Hard forks: rotate the collateral UTxO before every protocol-version bump
+
+This is a scheduled operator duty, not an optional one. It closes the only
+structural path by which an already-issued witness can end up consuming the
+collateral.
+
+**Why.** Phase-2 script evaluation is a function of the script, its arguments,
+the committed execution units, the cost models, the transaction context, and
+the **major protocol version**. A transaction commits to the cost models
+through the script-data hash in body field 11 — change them and the ledger
+rejects it at phase 1 with `PPViewHashesDontMatch`, before phase 2 runs. It
+cannot commit to the protocol version, and Plutus keys both builtin semantics
+and UPLC decoder strictness on that value. At `vanRossemPV` (major version 11)
+`ensurable` switched roughly forty builtins to bounds-checked arguments for all
+three ledger languages, and `maxBoundsByPV` tightened the decoder's type-header
+and constructor limits. Neither change requires a cost-model update, so the
+phase-1 hash check does not fire.
+
+Nothing forces cost models to change at a fork either: when the on-chain
+parameter list is shorter than expected the ledger fills the remainder with
+`maxBound` and warns rather than rejecting, and `HardForkInitiation` and
+`ParameterChange` are independent governance actions with independent
+enactment epochs. On mainnet the Plutus cost-model change was enacted on
+2026-06-18 and protocol version 11 activated on 2026-07-18, leaving a month in
+which a witness issued beforehand stayed valid straight across the boundary.
+
+**The window.** An attacker would need to obtain a witness for a transaction
+that succeeds under the current semantics and fails under the next, hold it
+across the fork, keep its inputs unspent, and submit afterwards with
+`is_valid=false`. Narrow, but it re-arms at every future fork.
+
+**The procedure.** A `HardForkInitiation` action is ratified an epoch before it
+enacts, so there is always advance notice.
+
+1. Watch for a ratified `HardForkInitiation` on each network you serve.
+2. Before the enactment epoch boundary, spend the advertised collateral UTxO
+   back to the same provider address, creating a new `txid#ix`.
+3. Update `*_TXID` / `*_TXIDX` in the environment file, update
+   `known.hosts.json`, and restart the service.
+4. Confirm `/healthz` is green and the landing page shows the new reference.
+
+Spending the old UTxO makes every outstanding witness that references it
+phase-1 invalid via `BadInputsUTxO`, so no signature issued before the fork can
+be redeemed after it. Rotating is also the correct response to any suspected
+compromise of the evaluator.
+
+This service deliberately does **not** require a short `invalid_hereafter` to
+achieve the same bound. Many Plutus contracts constrain their own validity
+interval, and forcing a short TTL would lock out exactly the transactions that
+most need shared collateral.
 
 ## Supported versions
 
@@ -137,10 +189,15 @@ hardening:
       becomes per-instance (effective rate = `N * COLLATERAL_THROTTLE_RATE`).
       Either keep `instance_count: 1` or wire in a shared cache (e.g.
       DO Managed Redis + `django-redis`) before scaling.
-- [ ] Concurrency math: gunicorn runs `gthread` workers, so a single
-      instance can hold roughly `workers * threads` requests in flight
-      (default `2 * 8 = 16`). The bottleneck per request is the Koios
-      RTT — most requests finish in well under a second, but a slow
-      Koios spell can pin threads. Bump `--threads` (cheap) before
-      `--workers` (more memory) if `/metrics` shows the duration
-      histogram drifting up.
+- [ ] Concurrency math: there are two distinct ceilings, and only the
+      second one moves throughput. A single instance holds roughly
+      `workers * threads` HTTP requests in flight (default `2 * 8 = 16`),
+      but concurrent *upstream* calls are capped separately at
+      `workers * KOIOS_MAX_IN_FLIGHT` (default `2 * 4 = 8`). Since every
+      signing request makes an upstream call, sustained throughput is
+      `workers * KOIOS_MAX_IN_FLIGHT / koios_latency` — about 16 rps at a
+      500 ms RTT — and requests above that budget are shed as 503 rather
+      than queued. Raising `--threads` therefore cannot increase
+      throughput; raise `KOIOS_MAX_IN_FLIGHT` (and keep it at or below
+      the adapter's `pool_maxsize` of 16) or reduce upstream latency by
+      self-hosting the evaluator.

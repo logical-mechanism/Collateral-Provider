@@ -7,7 +7,6 @@ from typing import ClassVar
 from django.conf import settings
 from django.http import (
     HttpResponse,
-    HttpResponseBadRequest,
     HttpResponseNotFound,
     JsonResponse,
 )
@@ -30,6 +29,7 @@ from rest_framework.views import APIView
 from .data_files import MtimeReloadingJson
 from .health import readiness_problems
 from .known_hosts import validate_known_hosts_registry
+from .middleware import COLLATERAL_PATH_RE
 from .serializers import ProvideCollateralSerializer
 from .services.collateral import issue_witness
 
@@ -418,13 +418,53 @@ def known_hosts_view(request):
     return response
 
 
+def _wants_json(request) -> bool:
+    """True when the caller is an API client rather than a browsing human.
+
+    A browser navigating to a stale link sends ``Accept: text/html``; an SDK
+    or curl does not. Anything under a configured network prefix is API
+    surface regardless of headers.
+    """
+    if COLLATERAL_PATH_RE.match(request.path):
+        return True
+    accept = request.META.get("HTTP_ACCEPT", "")
+    return "text/html" not in accept
+
+
 def custom_page_not_found(request, exception):
+    """Redirect humans to the landing page; give API clients a real 404.
+
+    Redirecting everything was actively misleading: every mainstream HTTP
+    client follows redirects by default, so a mistyped collateral URL returned
+    302 -> 200 and an HTML landing page where the integrator expected an
+    error. They would see a success status for a request that never reached
+    the endpoint.
+    """
+    if request.method not in ("GET", "HEAD") or _wants_json(request):
+        return JsonResponse({"detail": "Not Found"}, status=404)
     return redirect("/")
+
+
+def custom_server_error(request):
+    """Keep the {"detail": ...} envelope for errors that escape DRF.
+
+    DRF's exception handler returns None for anything that is not an
+    APIException, which re-raises into Django's default HTML 500 page. Django
+    calls this with no exception argument, and it must never raise — so it
+    renders no template and reads no settings.
+    """
+    logger.error("Unhandled server error at %s", request.path)
+    return JsonResponse(
+        {"detail": "Internal Server Error"},
+        status=500,
+    )
 
 
 def custom_disallowed_host_handler(request, exception):
     # request.get_host() can itself raise DisallowedHost; pull the raw
-    # header instead so we always log something useful.
+    # header instead so we always log something useful. Answer in the same
+    # {"detail": ...} envelope as every other error so a misconfigured proxy
+    # doesn't hand the integrator an unparseable body.
     raw = request.META.get("HTTP_HOST", "<missing>")
     logger.warning("DisallowedHost: %s", raw)
-    return HttpResponseBadRequest("Invalid Host Header")
+    return JsonResponse({"detail": "Invalid Host Header"}, status=400)

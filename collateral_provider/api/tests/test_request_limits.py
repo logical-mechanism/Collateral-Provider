@@ -59,9 +59,15 @@ class TestBodySizeCap(TestCase):
 
     @override_settings(DATA_UPLOAD_MAX_MEMORY_SIZE=128)
     @patch("api.views.ProvideCollateralView.post")
-    def test_oversize_stream_without_content_length_rejected_before_view(
-        self, mock_view
-    ):
+    def test_stream_without_content_length_rejected_before_view(self, mock_view):
+        """No Content-Length means no request, and the view never runs.
+
+        Django bounds the request stream by Content-Length, so without that
+        header the body reads as empty and the serializer would report a
+        missing ``tx`` field — blaming the caller for a header they never
+        set. 411 names the actual problem instead. The size cap is moot here
+        because nothing is read.
+        """
         request = RequestFactory().post(
             self.url,
             data=b"x" * 129,
@@ -73,6 +79,8 @@ class TestBodySizeCap(TestCase):
 
         response = RequestBodyLimitMiddleware(mock_view)(request)
 
-        self.assertEqual(response.status_code, 413)
-        self.assertJSONEqual(response.content, {"detail": "Request Body Too Large"})
+        self.assertEqual(response.status_code, 411)
+        self.assertJSONEqual(
+            response.content, {"detail": "Content-Length Header Is Required"}
+        )
         mock_view.assert_not_called()
