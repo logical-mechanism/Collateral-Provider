@@ -43,12 +43,16 @@ RUN pip install -r requirements.txt
 # Everything else (known.hosts.json, etc.) lives at /app/.
 COPY . /app/
 
-# Static files for the landing page + DRF browsable API. Collectstatic
-# needs settings.py to import successfully, which means PKH/SECRET_KEY/etc.
-# must parse — pass throwaway values via env (apps.py skips key validation
-# during collectstatic so the dummy SKEY/VKEY paths are fine).
+# Static files for the landing page. Collectstatic needs settings.py to
+# import successfully, which means PKH/SECRET_KEY/etc. must parse — pass
+# throwaway values via env (apps.py skips key validation during collectstatic
+# so the dummy SKEY/VKEY paths are fine).
+#
+# PKH is a 28-byte Blake2b-224 key hash, so its placeholder is 56 hex
+# characters, not the 64 used for the 32-byte transaction ids below. Settings
+# now enforces that length, which is what caught this.
 RUN set -eux; \
-    export PKH=0000000000000000000000000000000000000000000000000000000000000000 \
+    export PKH=00000000000000000000000000000000000000000000000000000000 \
            DJANGO_SECRET_KEY=build-time-only-not-a-real-secret \
            ENVIRONMENT=development \
            PREPROD_TXID=0000000000000000000000000000000000000000000000000000000000000000 \
