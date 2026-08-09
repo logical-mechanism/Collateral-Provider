@@ -2,9 +2,11 @@ from api.views import (
     ProvideCollateralView,
     custom_disallowed_host_handler,
     custom_page_not_found,
+    custom_server_error,
     healthz_view,
     known_hosts_view,
     landing_page,
+    livez_view,
     metrics_view,
 )
 from django.urls import path, re_path
@@ -19,6 +21,7 @@ urlpatterns = [
     re_path(r"^(?P<environment>[^/]+)/collateral/?$", ProvideCollateralView.as_view(), name="collateral"),
     re_path(r"^known_hosts/?$", known_hosts_view, name="known_hosts"),
     re_path(r"^healthz/?$", healthz_view, name="healthz"),
+    re_path(r"^livez/?$", livez_view, name="livez"),
     re_path(r"^metrics/?$", metrics_view, name="metrics"),
 
     # OpenAPI schema + interactive docs. Trailing slash is optional on all
@@ -31,3 +34,4 @@ urlpatterns = [
 
 handler404 = custom_page_not_found
 handler400 = custom_disallowed_host_handler
+handler500 = custom_server_error

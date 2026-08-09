@@ -1,12 +1,15 @@
 import unittest
+from typing import ClassVar
 from unittest.mock import patch
 
+import cbor2
 from rest_framework.exceptions import ValidationError
 
 from api.tests.test_big_data import invalid_tx_body_too_big
 from api.validators.cbor import (
     check_cbor_hex,
     check_collateral,
+    check_collateral_return,
     check_inputs,
     check_outputs,
     check_signers,
@@ -15,6 +18,21 @@ from api.validators.cbor import (
 
 
 class TestCborValidator(unittest.TestCase):
+    def test_rejects_trailing_data(self):
+        with self.assertRaises(ValidationError) as context:
+            check_tx_body(cbor2.dumps([{}, {}, True, None]) + b"\x00")
+        self.assertIn("Trailing Data After Tx", str(context.exception.detail))
+
+    def test_requires_exact_four_element_envelope(self):
+        with self.assertRaises(ValidationError) as context:
+            check_tx_body(cbor2.dumps([{}, {}, True]))
+        self.assertIn("Tx Must Have Four Elements", str(context.exception.detail))
+
+    def test_requires_witness_set_map(self):
+        with self.assertRaises(ValidationError) as context:
+            check_tx_body(cbor2.dumps([{}, [], True, None]))
+        self.assertIn("Witness Set Is Not A Dict", str(context.exception.detail))
+
     def test_empty_cbor_hex(self):
         with self.assertRaises(ValidationError) as context:
             check_cbor_hex("")
@@ -50,7 +68,7 @@ class TestCborValidator(unittest.TestCase):
         tx_bytes = check_cbor_hex(cbor_hex)
         with self.assertRaises(ValidationError) as context:
             check_tx_body(tx_bytes)
-        self.assertIn("Boolean Does Not Exist In Tx", str(context.exception.detail))
+        self.assertIn("Tx Must Have Four Elements", str(context.exception.detail))
 
     def test_not_a_bool(self):
         # is_valid slot is the integer 0 instead of true/false.
@@ -154,6 +172,31 @@ class TestCborValidator(unittest.TestCase):
             check_collateral(body, {"TXID": "e0f9a1641be97add010356e8f8ac278372e2acac24ee21f169f861cddb3c55c5", "TXIDX": 0})
         self.assertIn("Collateral Is Not Being Used", str(context.exception.detail))
 
+    def test_rejects_multiple_collateral_inputs(self):
+        body = {
+            13: {
+                (bytes.fromhex("11" * 32), 0),
+                (bytes.fromhex("22" * 32), 1),
+            }
+        }
+        with self.assertRaises(ValidationError) as context:
+            check_collateral(body, {"TXID": "11" * 32, "TXIDX": 0})
+        self.assertIn("Exactly One Collateral", str(context.exception.detail))
+
+    def test_rejects_malformed_input_reference_lengths_and_indices(self):
+        env = {"TXID": "ff" * 32, "TXIDX": 0}
+        malformed = (
+            ((bytes.fromhex("11" * 31), 0), "TxId Must Be 32 Bytes"),
+            ((bytes.fromhex("11" * 32), True), "TxIdx Is Not An Int"),
+            ((bytes.fromhex("11" * 32), -1), "TxIdx Can't Be Negative"),
+            ((bytes.fromhex("11" * 32), 0, 1), "UTxO Must Have Two Elements"),
+        )
+        for txin, message in malformed:
+            with self.subTest(txin=txin):
+                with self.assertRaises(ValidationError) as context:
+                    check_inputs({0: {txin}}, env)
+                self.assertIn(message, str(context.exception.detail))
+
     def test_signer_does_not_exist(self):
         cbor_hex = "84A800D9010282825820E0F9A1641BE97ADD010356E8F8AC278372E2ACAC24EE21F169F861CDDB3C55C500825820E0F9A1641BE97ADD010356E8F8AC278372E2ACAC24EE21F169F861CDDB3C55C5010182A300581D7025891024CD6915AB6F7D85D43869C7BFC7021B7008BAD86E70A7C6CE011A001605BC028201D81843D87980A300581D70C757598C8D204251F0E102B5092ADF5627AEED553911CD6F82BD315401821A00184476A1581C20D133FB8814F3F6E9AA7777D73AAB7C8CDFA7D9B2D1C94BA0F94100A1582000AEB168C1C5A787D5DE5CBC0760D078BCC51B22BA8FA69E432A89137F17D9F601028201D818585BD8799F1B00000192EA62DA801B00000192EA676E601A000493E0581C20D133FB8814F3F6E9AA7777D73AAB7C8CDFA7D9B2D1C94BA0F94100582000AEB168C1C5A787D5DE5CBC0760D078BCC51B22BA8FA69E432A89137F17D9F6FF021A000186A0031A047EB7FF081A047EB5A60B582001CA3D633CA222424E36C1BA5A9CD5501FD4B19F3F6B136AF820DD4B3CCDF3490DD90102818258201D388E615DA2DCA607E28F704130D04E39DA6F251D551D66D054B75607E0393F0012D9010282825820680D6B17AEAC96BD3C965F6E9A6B45082870E267EA260E4AEAC31550719D315901825820724B724EC5C489DFF4D70A2CF94389AAC21F88193891A2D6B3E02B4E2997D39501A105A282000082D87A8082000082000182D87980820000F5F6"
         tx_bytes = check_cbor_hex(cbor_hex)
@@ -177,3 +220,95 @@ class TestCborValidator(unittest.TestCase):
         with self.assertRaises(ValidationError) as context:
             check_signers(body, "ac24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4")
         self.assertIn("Public Key Hash Is Not Being Used", str(context.exception.detail))
+
+
+class TestUntaggedSetEncoding(unittest.TestCase):
+    """Conway permits both set encodings; we must accept both.
+
+    conway.cddl declares ``set<a0> = #6.258([* a0]) / [* a0]``. cbor2 decodes
+    the tagged form to a Python ``set`` of tuples and the untagged form to a
+    ``list`` of ``list``s, so gating on ``isinstance(x, set)`` silently
+    rejected a legal encoding and would break any builder that omits tag 258.
+    """
+
+    env: ClassVar[dict] = {"TXID": "11" * 32, "TXIDX": 0}
+    pkh = "7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4"
+
+    def test_untagged_inputs_accepted(self):
+        check_inputs({0: [[bytes.fromhex("22" * 32), 0]]}, self.env)
+
+    def test_untagged_collateral_accepted(self):
+        check_collateral({13: [[bytes.fromhex("11" * 32), 0]]}, self.env)
+
+    def test_untagged_signers_accepted(self):
+        check_signers({14: [bytes.fromhex(self.pkh)]}, self.pkh)
+
+    def test_tagged_form_still_accepted(self):
+        check_inputs({0: {(bytes.fromhex("22" * 32), 0)}}, self.env)
+        check_collateral({13: {(bytes.fromhex("11" * 32), 0)}}, self.env)
+
+    def test_explicit_cbor_tag_258_accepted(self):
+        tagged = cbor2.CBORTag(258, [[bytes.fromhex("11" * 32), 0]])
+        check_collateral({13: tagged}, self.env)
+
+    def test_untagged_encoding_still_rejects_spending_the_collateral(self):
+        with self.assertRaises(ValidationError) as context:
+            check_inputs({0: [[bytes.fromhex("11" * 32), 0]]}, self.env)
+        self.assertIn("Collateral Is Being Spent In Tx", str(context.exception.detail))
+
+    def test_untagged_encoding_still_rejects_a_foreign_collateral(self):
+        with self.assertRaises(ValidationError) as context:
+            check_collateral({13: [[bytes.fromhex("99" * 32), 0]]}, self.env)
+        self.assertIn("Collateral Is Not Being Used", str(context.exception.detail))
+
+    def test_untagged_duplicates_collapse_like_the_tagged_form(self):
+        # A tagged set would dedupe these in the decoder; the untagged list
+        # must not therefore trip the "exactly one collateral" rule.
+        entry = [bytes.fromhex("11" * 32), 0]
+        check_collateral({13: [entry, list(entry)]}, self.env)
+
+    def test_non_container_still_rejected(self):
+        for value in (5, "abc", b"abc", None):
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                check_inputs({0: value}, self.env)
+
+
+class TestCollateralReturn(unittest.TestCase):
+    """Body field 16 decides who receives the collateral remainder.
+
+    It cannot make a script fail, so it is not itself a route to losing the
+    collateral — but left unchecked it lets an attacker keep what is burned,
+    turning a break-even griefing attack into a profitable one.
+    """
+
+    pkh = "7c24c22d1dc252d31f6022ff22ccc838c2ab83a461172d7c2dae61f4"
+
+    def test_absent_field_is_allowed(self):
+        check_collateral_return({}, self.pkh)
+
+    def test_return_to_provider_key_address_allowed(self):
+        address = bytes.fromhex("60" + self.pkh)
+        check_collateral_return({16: [address, 1000000]}, self.pkh)
+
+    def test_return_to_attacker_address_rejected(self):
+        address = bytes.fromhex("60" + "aa" * 28)
+        with self.assertRaises(ValidationError) as context:
+            check_collateral_return({16: [address, 1000000]}, self.pkh)
+        self.assertIn("Must Pay The Collateral Provider", str(context.exception.detail))
+
+    def test_return_to_script_address_rejected(self):
+        # Odd address-type nibble means a script payment credential; the
+        # provider key cannot control the funds even if the hash matches.
+        address = bytes.fromhex("70" + self.pkh)
+        with self.assertRaises(ValidationError) as context:
+            check_collateral_return({16: [address, 1000000]}, self.pkh)
+        self.assertIn("Must Not Pay A Script Address", str(context.exception.detail))
+
+    def test_map_encoded_output_is_handled(self):
+        address = bytes.fromhex("60" + self.pkh)
+        check_collateral_return({16: {0: address, 1: 1000000}}, self.pkh)
+
+    def test_malformed_address_rejected(self):
+        for value in (b"", b"\x60\x00", "not-bytes", 5):
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                check_collateral_return({16: [value, 1]}, self.pkh)

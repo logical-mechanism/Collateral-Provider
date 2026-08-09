@@ -1,0 +1,206 @@
+# Self-hosted single-host deployment, for operators running their own instance
+# on Ubuntu/systemd — see docs/UBUNTU_DEPLOY.md.
+#
+# This is NOT how the reference provider (www.giveme.my) deploys. That runs on
+# DigitalOcean App Platform, which builds the Dockerfile and auto-deploys on
+# every push to main; nothing in this file participates in that. The workflow
+# is workflow_dispatch-only, so it never fires on its own, and it does nothing
+# at all unless a `production` environment is configured with DEPLOY_HOST,
+# DEPLOY_PORT, DEPLOY_USER, PUBLIC_HEALTH_URL and the two SSH secrets.
+name: Deploy self-hosted (Ubuntu)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Production deploys are serialized. A newer dispatch must wait for the
+# current deploy instead of interrupting it halfway through a release.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  guard:
+    name: Validate production dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require the production branch and an exact commit SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/production" ]]; then
+            echo "::error::Production deploys must be dispatched from the production branch."
+            exit 1
+          fi
+          if [[ ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::GITHUB_SHA is not an exact 40-character commit SHA."
+            exit 1
+          fi
+
+  ci:
+    name: Reusable CI
+    needs: guard
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy exact archive
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_HEALTH_URL }}
+
+    steps:
+      - name: Check out the dispatched commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify deployment configuration and checkout
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          PUBLIC_HEALTH_URL: ${{ vars.PUBLIC_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::GITHUB_SHA is not an exact 40-character commit SHA."
+            exit 1
+          fi
+          if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+            echo "::error::The checkout does not match GITHUB_SHA."
+            exit 1
+          fi
+          if [[ -z "$DEPLOY_HOST" || -z "$DEPLOY_USER" ]]; then
+            echo "::error::DEPLOY_HOST and DEPLOY_USER must be configured."
+            exit 1
+          fi
+          if [[ ! "$DEPLOY_PORT" =~ ^[0-9]+$ ]] \
+            || (( 10#$DEPLOY_PORT < 1 || 10#$DEPLOY_PORT > 65535 )); then
+            echo "::error::DEPLOY_PORT must be an integer from 1 through 65535."
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import os
+          from urllib.parse import urlsplit
+
+          value = os.environ["PUBLIC_HEALTH_URL"]
+          parsed = urlsplit(value)
+          valid = (
+              parsed.scheme == "https"
+              and parsed.hostname is not None
+              and parsed.username is None
+              and parsed.password is None
+              and parsed.path.rstrip("/") == "/healthz"
+              and not parsed.query
+              and not parsed.fragment
+          )
+          if not valid:
+              raise SystemExit(
+                  "PUBLIC_HEALTH_URL must be a credential-free HTTPS /healthz URL"
+              )
+          PY
+
+      - name: Stream the exact commit archive to production
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DEPLOY_SSH_PRIVATE_KEY" || -z "$DEPLOY_KNOWN_HOSTS" ]]; then
+            echo "::error::The production SSH key and known_hosts pin must be configured."
+            exit 1
+          fi
+
+          ssh_dir="$RUNNER_TEMP/production-deploy-ssh"
+          private_key="$ssh_dir/id_deploy"
+          known_hosts="$ssh_dir/known_hosts"
+          install -d -m 700 "$ssh_dir"
+          cleanup() {
+            rm -f -- "$private_key" "$known_hosts"
+            rmdir -- "$ssh_dir" 2> /dev/null || true
+          }
+          trap cleanup EXIT
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > "$private_key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$known_hosts"
+
+          if ! ssh-keygen -y -P '' -f "$private_key" > /dev/null; then
+            echo "::error::DEPLOY_SSH_PRIVATE_KEY is not a usable unencrypted private key."
+            exit 1
+          fi
+
+          known_host="$DEPLOY_HOST"
+          if [[ "$DEPLOY_PORT" != "22" ]]; then
+            known_host="[$DEPLOY_HOST]:$DEPLOY_PORT"
+          fi
+          if ! ssh-keygen -F "$known_host" -f "$known_hosts" > /dev/null; then
+            echo "::error::DEPLOY_KNOWN_HOSTS has no pin for the configured host and port."
+            exit 1
+          fi
+
+          ssh_options=(
+            -F /dev/null
+            -T
+            -p "$DEPLOY_PORT"
+            -l "$DEPLOY_USER"
+            -i "$private_key"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o PasswordAuthentication=no
+            -o KbdInteractiveAuthentication=no
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$known_hosts"
+            -o GlobalKnownHostsFile=/dev/null
+            -o UpdateHostKeys=no
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=2
+            -o LogLevel=ERROR
+          )
+
+          git archive --format=tar "$GITHUB_SHA" \
+            | ssh "${ssh_options[@]}" -- "$DEPLOY_HOST" "deploy $GITHUB_SHA"
+
+      - name: Smoke test public health endpoint
+        shell: bash
+        env:
+          PUBLIC_HEALTH_URL: ${{ vars.PUBLIC_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          health_response="$RUNNER_TEMP/production-health.json"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --retry 12 \
+            --retry-all-errors \
+            --retry-delay 5 \
+            --connect-timeout 5 \
+            --max-time 10 \
+            "$PUBLIC_HEALTH_URL" > "$health_response"
+
+          python3 - "$health_response" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as response:
+              payload = json.load(response)
+          if payload.get("status") != "ok":
+              raise SystemExit("production /healthz did not report status=ok")
+          PY

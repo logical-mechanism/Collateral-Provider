@@ -9,9 +9,11 @@ the validation error was raised against.
 from unittest.mock import patch
 
 from django.core.cache import cache
-from django.test import TestCase, override_settings
+from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
+
+from api.views import _wants_json
 
 
 @override_settings(ALLOWED_HOSTS=["testserver"])
@@ -50,12 +52,16 @@ class TestErrorEnvelope(TestCase):
     @patch("api.validators.transaction.evaluate_transaction")
     def test_503_uses_detail(self, mock_eval):
         from api.simulate import UpstreamUnavailable
-        from api.tests.test_views import build_happy_path_tx_cbor
+        from api.tests.test_views import TEST_COST_MODELS, build_happy_path_tx_cbor
         mock_eval.side_effect = UpstreamUnavailable("upstream down")
 
-        response = self.client.post(
-            self.url, {"tx": build_happy_path_tx_cbor()}, format="json"
-        )
+        with patch(
+            "api.validators.transaction.get_protocol_cost_models",
+            return_value=TEST_COST_MODELS,
+        ):
+            response = self.client.post(
+                self.url, {"tx": build_happy_path_tx_cbor()}, format="json"
+            )
         self.assertEqual(response.status_code, 503)
         body = response.json()
         self.assertEqual(set(body.keys()), {"detail"})
@@ -88,3 +94,144 @@ class TestErrorEnvelope(TestCase):
         response = self.client.post(self.url, {"tx": ""}, format="json")
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json(), {"detail": "Field 'tx' may not be blank"})
+
+
+@override_settings(ALLOWED_HOSTS=["testserver"])
+class TestEnvelopeSurvivesClientHeaders(TestCase):
+    """The response shape must be a property of the endpoint, not the caller.
+
+    DRF's default renderer list included the browsable API, so a client
+    sending ``Accept: text/html`` received an HTML page instead of the
+    documented envelope — on success as well as on error.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.url = reverse("collateral", kwargs={"environment": "preprod"})
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_html_accept_still_gets_json_envelope(self):
+        for accept in ("text/html", "text/html,application/xhtml+xml", "*/*", "text/plain"):
+            with self.subTest(accept=accept):
+                response = self.client.post(
+                    self.url, {"tx": "not-hex"}, format="json", HTTP_ACCEPT=accept
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response["Content-Type"], "application/json")
+                self.assertEqual(response.json(), {"detail": "Invalid Hex Data In Tx"})
+
+
+@override_settings(ALLOWED_HOSTS=["testserver"])
+class TestNotFoundEnvelope(TestCase):
+    """A mistyped API URL must not look like a success.
+
+    handler404 used to redirect everything to the landing page. Every
+    mainstream HTTP client follows redirects by default, so an integrator
+    POSTing to a misspelled path saw 200 and an HTML page.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_mistyped_collateral_path_returns_json_404(self):
+        response = self.client.post(
+            "/preprod/collaterall/", {"tx": "deadbeef"}, format="json"
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json(), {"detail": "Not Found"})
+
+    def test_api_client_get_returns_json_404(self):
+        response = self.client.get("/no/such/endpoint", HTTP_ACCEPT="application/json")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json(), {"detail": "Not Found"})
+
+    def test_browser_navigation_still_redirects_home(self):
+        response = self.client.get("/an/old/link", HTTP_ACCEPT="text/html")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], "/")
+
+
+@override_settings(ALLOWED_HOSTS=["testserver"])
+class TestNonDrfErrorEnvelope(TestCase):
+    """Errors raised outside DRF must still use the documented envelope.
+
+    DRF's exception handler returns None for anything that is not an
+    APIException, which re-raises into Django's default HTML 500 page; and a
+    rejected Host header never reaches DRF at all. Both used to hand the
+    integrator a body they could not parse.
+    """
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch("api.views.ProvideCollateralView.post", side_effect=RuntimeError("boom"))
+    def test_unhandled_exception_returns_json_500(self, _mock_post):
+        client = APIClient(raise_request_exception=False)
+        url = reverse("collateral", kwargs={"environment": "preprod"})
+        response = client.post(url, {"tx": "deadbeef"}, format="json")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response["Content-Type"], "application/json")
+        self.assertEqual(response.json(), {"detail": "Internal Server Error"})
+
+    def test_disallowed_host_returns_json_400(self):
+        response = self.client.get("/", HTTP_HOST="evil.example")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response["Content-Type"], "application/json")
+        self.assertEqual(response.json(), {"detail": "Invalid Host Header"})
+
+
+@override_settings(ALLOWED_HOSTS=["testserver"])
+class TestNegotiationDoesNotBreakMultiRendererViews(TestCase):
+    """The JSON fallback must not replace negotiation outright.
+
+    An unconditional `renderers[0]` silences 406 but also discards
+    `?format=json` and Accept-based selection, which drf-spectacular's schema
+    view depends on — it would serve YAML bytes under a JSON content type.
+    """
+
+    def test_schema_format_json_returns_json(self):
+        response = self.client.get("/api/schema/?format=json")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("json", response["Content-Type"])
+        self.assertTrue(response.content.lstrip().startswith(b"{"))
+
+    def test_schema_default_still_yaml(self):
+        response = self.client.get("/api/schema/")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.content.lstrip().startswith(b"openapi:"))
+
+
+class TestAcceptPreference(SimpleTestCase):
+    """`_wants_json` must compare stated preferences, not substrings.
+
+    An SDK forwarding an end user's header sends
+    `application/json, text/html;q=0.1` — it contains `text/html` while
+    clearly preferring JSON, and a substring test sent exactly that caller
+    the misleading redirect the 404 fix exists to remove.
+    """
+
+    def test_preference_decides(self):
+        cases = {
+            "application/json, text/html;q=0.1": True,
+            "application/json": True,
+            "*/*": True,
+            "": True,
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8": False,
+            "text/html": False,
+        }
+        factory = RequestFactory()
+        for accept, expected in cases.items():
+            with self.subTest(accept=accept):
+                request = factory.get("/no/such/path", HTTP_ACCEPT=accept)
+                self.assertIs(_wants_json(request), expected)
+
+    def test_collateral_path_is_always_api_surface(self):
+        request = RequestFactory().post("/preprod/collateral/", HTTP_ACCEPT="text/html")
+        self.assertTrue(_wants_json(request))

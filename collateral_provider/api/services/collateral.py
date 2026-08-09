@@ -14,11 +14,14 @@ directly without building a serializer context.
 import logging
 
 from django.conf import settings
+from nacl.exceptions import RuntimeError as NaClRuntimeError
+from rest_framework.exceptions import APIException
 
 from api.signature import witness_tx_cbor
 from api.validators.cbor import (
     check_cbor_hex,
     check_collateral,
+    check_collateral_return,
     check_inputs,
     check_outputs,
     check_signers,
@@ -30,6 +33,12 @@ from api.validators.transaction import check_valid_tx
 logger = logging.getLogger("api")
 
 
+class SigningServiceUnavailable(APIException):
+    status_code = 503
+    default_detail = "Signing Service Unavailable"
+    default_code = "signing_unavailable"
+
+
 def issue_witness(
     *,
     tx_cbor: str,
@@ -37,7 +46,6 @@ def issue_witness(
     env_settings: dict,
     ip_address: str | None,
     networks: list[str],
-    additional_utxos: list | None = None,
 ) -> tuple[str, str]:
     """Run the validator chain in cheap-to-expensive order; on success
     sign the tx body and return ``(witness_hex, tx_hash_hex)``.
@@ -47,7 +55,7 @@ def issue_witness(
     circuits the rest. The view's standard error handling pipeline
     turns either into the canonical ``{"detail": ...}`` envelope.
     """
-    logger.debug("Validating tx from %s", ip_address)
+    logger.debug("Validating collateral transaction")
 
     check_ip_address(ip_address)
     check_environment(environment, networks)
@@ -57,9 +65,14 @@ def issue_witness(
     check_inputs(body, env_settings)
     check_outputs(body)
     check_collateral(body, env_settings)
+    check_collateral_return(body, settings.PKH)
     check_signers(body, settings.PKH)
 
     # Most expensive check last: it's a remote HTTP call.
-    check_valid_tx(tx_cbor, environment, additional_utxos=additional_utxos)
+    check_valid_tx(tx_cbor, environment)
 
-    return witness_tx_cbor(tx_cbor, settings.SKEY_PATH, settings.VKEY_PATH)
+    try:
+        return witness_tx_cbor(tx_cbor, settings.SKEY_PATH, settings.PKH)
+    except (OSError, KeyError, TypeError, ValueError, NaClRuntimeError) as exc:
+        logger.error("Signing identity became unavailable: %s", exc)
+        raise SigningServiceUnavailable() from exc

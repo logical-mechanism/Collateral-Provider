@@ -1,6 +1,5 @@
 import ipaddress
 import logging
-import os
 import time
 from functools import lru_cache
 from typing import ClassVar
@@ -8,7 +7,6 @@ from typing import ClassVar
 from django.conf import settings
 from django.http import (
     HttpResponse,
-    HttpResponseBadRequest,
     HttpResponseNotFound,
     JsonResponse,
 )
@@ -29,6 +27,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .data_files import MtimeReloadingJson
+from .health import readiness_problems
+from .known_hosts import validate_known_hosts_registry
+from .middleware import COLLATERAL_PATH_RE
 from .serializers import ProvideCollateralSerializer
 from .services.collateral import issue_witness
 
@@ -44,13 +45,12 @@ def _known_hosts_loader() -> MtimeReloadingJson:
     global _known_hosts
     path = settings.KNOWN_HOSTS_PATH
     if _known_hosts is None or _known_hosts.path != path:
-        _known_hosts = MtimeReloadingJson(path, default={})
+        _known_hosts = MtimeReloadingJson(
+            path,
+            default={},
+            validator=validate_known_hosts_registry,
+        )
     return _known_hosts
-
-
-def _known_hosts_path() -> str:
-    """Used by /healthz to report whether the known-hosts file is on disk."""
-    return _known_hosts_loader().path
 
 
 def _load_known_hosts() -> dict:
@@ -91,24 +91,67 @@ def _is_trusted_proxy(remote: str | None) -> bool:
     return any(peer in net for net in networks)
 
 
+def _parse_ip(value: str | None):
+    """Return a validated IP address, or ``None`` for malformed input.
+
+    Forwarding headers are untrusted text even when they arrive through a
+    trusted proxy.  Keeping parsing in one place ensures we never use an
+    arbitrary header value as a throttle key, ban-list identity, or log
+    field.  Scoped IPv6 addresses are intentionally rejected: zone IDs are
+    meaningful only on the sender's host and are not valid client identities
+    across an HTTP proxy boundary.
+    """
+    if not value or "%" in value:
+        return None
+    try:
+        return ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+
+
 def _client_ip(request) -> str | None:
     """Best-effort client IP extraction.
 
     Only honors X-Forwarded-For when the immediate peer (Django's
-    REMOTE_ADDR) is in ``settings.TRUSTED_PROXY_IPS``. Otherwise returns
-    REMOTE_ADDR directly — a client connecting to gunicorn without the
-    proxy in front can't spoof their source IP and bypass the per-IP
-    throttle just by setting an X-Forwarded-For header.
+    REMOTE_ADDR) is in ``settings.TRUSTED_PROXY_IPS``. When it is, walk the
+    forwarded chain from right to left, skip known proxy hops, and use the
+    first untrusted address as the client. This is important for the common
+    ``$proxy_add_x_forwarded_for`` configuration: a caller can prefix a fake
+    leftmost value, but the proxy-appended real address remains the rightmost
+    untrusted hop.
+
+    Otherwise returns validated REMOTE_ADDR directly — a client connecting
+    to gunicorn without the proxy in front can't spoof their source IP and
+    bypass the per-IP throttle just by setting an X-Forwarded-For header.
 
     Entries in TRUSTED_PROXY_IPS may be bare IPs (``127.0.0.1``) or CIDR
     blocks (``10.0.0.0/8``). The latter is needed on container platforms
     that don't pin a single load-balancer IP.
     """
     remote = request.META.get("REMOTE_ADDR")
+    peer = _parse_ip(remote)
+    if peer is None:
+        return None
+
+    peer_text = str(peer)
     xff = request.META.get("HTTP_X_FORWARDED_FOR")
-    if xff and _is_trusted_proxy(remote):
-        return xff.split(",")[0].strip()
-    return remote
+    if not xff or not _is_trusted_proxy(peer_text):
+        return peer_text
+
+    for raw_hop in reversed(xff.split(",")):
+        hop = _parse_ip(raw_hop)
+        if hop is None:
+            # Fail closed on a malformed hop. Treat the immediate peer as
+            # the identity rather than looking farther left at values the
+            # caller may have supplied.
+            return peer_text
+        hop_text = str(hop)
+        if not _is_trusted_proxy(hop_text):
+            return hop_text
+
+    # Every supplied hop claims to be a trusted proxy, so the header never
+    # established a client address. Do not fall back to its leftmost value.
+    return peer_text
 
 
 class ProvideCollateralThrottle(throttling.AnonRateThrottle):
@@ -116,6 +159,19 @@ class ProvideCollateralThrottle(throttling.AnonRateThrottle):
     # for legit clients (one tx per second), tight enough that a single
     # bad actor can't exhaust an upstream rate limit on their own.
     rate = settings.COLLATERAL_THROTTLE_RATE
+
+    def get_ident(self, request) -> str | None:
+        """Use the same trusted-proxy-aware identity as bans and metrics ACLs.
+
+        DRF's default implementation consumes ``X-Forwarded-For`` according
+        to its global ``NUM_PROXIES`` setting.  That is a separate trust model
+        from this service's ``TRUSTED_PROXY_IPS`` allowlist and, with DRF's
+        defaults, lets a directly-connected client forge a new throttle key
+        merely by changing the header.  Keeping this override next to
+        ``_client_ip`` makes the security boundary explicit and ensures bans,
+        metrics authorization, and throttling agree about the caller.
+        """
+        return _client_ip(request)
 
 
 @extend_schema_view(
@@ -128,8 +184,10 @@ class ProvideCollateralThrottle(throttling.AnonRateThrottle):
             "witness for it. Validation includes: collateral UTxO matches "
             "the configured one for this network, the provider PKH appears "
             "in required signers, the collateral is not in inputs, the "
-            "is_valid flag is true, and Koios `evaluateTransaction` accepts "
-            "the tx. Rate limited per IP."
+            "is_valid flag is true, the script-data hash binds the submitted "
+            "redeemers/datums, committed execution units cover the evaluated "
+            "budgets, and Koios `evaluateTransaction` accepts the tx. Rate "
+            "limited per IP."
         ),
         parameters=[
             OpenApiParameter(
@@ -150,61 +208,16 @@ class ProvideCollateralThrottle(throttling.AnonRateThrottle):
                 description="Witness CBOR (hex). Decoded shape: `[0, [pubkey, signature]]`.",
             ),
             400: OpenApiResponse(description="Validation error — invalid environment, invalid CBOR, or tx fails the collateral-usage rules."),
+            413: OpenApiResponse(description="JSON request body exceeds the configured pre-parser byte limit."),
             415: OpenApiResponse(description="Unsupported media type — body must be application/json."),
             429: OpenApiResponse(description="Rate limit exceeded."),
-            503: OpenApiResponse(description="Validation upstream (Koios) is unavailable; try again later."),
+            503: OpenApiResponse(description="Validation upstream or local signing identity is unavailable; try again later."),
         },
         examples=[
             OpenApiExample(
                 "Sample request",
                 value={"tx": "84a900d901028182582000...f5f6"},
                 request_only=True,
-            ),
-            OpenApiExample(
-                "Sample request with additional_utxos ([txin, txout] pair shape)",
-                value={
-                    "tx": "84a900d901028182582000...f5f6",
-                    "additional_utxos": [
-                        [
-                            {"transaction": {"id": "ab" * 32}, "index": 0},
-                            {
-                                "address": "addr_test1qz...",
-                                "value": {"ada": {"lovelace": 1500000}},
-                            },
-                        ],
-                    ],
-                },
-                request_only=True,
-                description=(
-                    "Optional `additional_utxos` is forwarded to Ogmios as "
-                    "`additionalUtxo` so script evaluation can see UTxOs "
-                    "from a transaction not yet on chain. Each entry may "
-                    "be a `[txin, txout]` pair (shown here, matching the "
-                    "Ogmios prose docs) or a flat Ogmios v6 `Utxo` object "
-                    "(see next example). Missing or empty is fine — the "
-                    "field is skipped."
-                ),
-            ),
-            OpenApiExample(
-                "Sample request with additional_utxos (flat Utxo shape)",
-                value={
-                    "tx": "84a900d901028182582000...f5f6",
-                    "additional_utxos": [
-                        {
-                            "transaction": {"id": "ab" * 32},
-                            "index": 0,
-                            "address": "addr_test1qz...",
-                            "value": {"ada": {"lovelace": 1500000}},
-                        },
-                    ],
-                },
-                request_only=True,
-                description=(
-                    "Same field as the previous example, using the flat "
-                    "Ogmios v6 `Utxo` shape — what callers learn when "
-                    "building against Koios directly. Both shapes may be "
-                    "mixed in one request."
-                ),
             ),
             OpenApiExample(
                 "Sample success",
@@ -219,11 +232,11 @@ class ProvideCollateralView(APIView):
 
     def post(self, request, environment):
         ip_address = _client_ip(request)
-        logger.debug("Request received: ip=%s env=%s", ip_address, environment)
+        logger.debug("Collateral request received: env=%s", environment)
 
         env_settings = settings.ENVIRONMENTS.get(environment)
         if not env_settings:
-            logger.warning("Invalid environment: ip=%s env=%s", ip_address, environment)
+            logger.warning("Invalid collateral environment: env=%s", environment)
             return Response(
                 {"detail": "Invalid Environment"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -237,26 +250,25 @@ class ProvideCollateralView(APIView):
         serializer.is_valid(raise_exception=True)
 
         started = time.monotonic()
-        witness_cbor, tx_hash = issue_witness(
+        witness_cbor, _ = issue_witness(
             tx_cbor=serializer.validated_data["tx"],
             environment=environment,
             env_settings=env_settings,
             ip_address=ip_address,
             networks=list(settings.ENVIRONMENTS.keys()),
-            additional_utxos=serializer.validated_data.get("additional_utxos"),
         )
         duration_ms = int((time.monotonic() - started) * 1000)
-        # Keep the structured fields on the record (JSON formatter
-        # surfaces them as top-level keys) while also embedding them in
-        # the message so the plain-text formatter prints something
-        # operators can grep without changing the format string.
+        # Deliberately omit both client IP and transaction hash. Keeping
+        # those together creates a durable link between a network identity
+        # and an on-chain transaction, contrary to the service's privacy
+        # goal. The request ID still correlates this line with errors and
+        # timings from the same request without becoming an on-chain handle.
         logger.info(
-            "Witnessed tx: ip=%s env=%s tx_hash=%s duration_ms=%d",
-            ip_address, environment, tx_hash, duration_ms,
+            "Witness issued: env=%s duration_ms=%d",
+            environment,
+            duration_ms,
             extra={
-                "ip": ip_address,
                 "env": environment,
-                "tx_hash": tx_hash,
                 "duration_ms": duration_ms,
             },
         )
@@ -268,9 +280,10 @@ class ProvideCollateralView(APIView):
     summary="Liveness/readiness check",
     description=(
         "Returns 200 if the service is configured well enough to serve "
-        "signing requests (signing keys readable, known_hosts.json present). "
+        "signing requests (the current signing key, verification key, and "
+        "PKH are cryptographically consistent). "
         "Returns 503 with a list of problems otherwise. Suitable for "
-        "container/load-balancer health probes; not rate limited."
+        "readiness probes; not rate limited and never calls Koios."
     ),
     responses={
         200: OpenApiResponse(
@@ -298,27 +311,8 @@ class ProvideCollateralView(APIView):
 @api_view(["GET"])
 @throttle_classes([])
 def healthz_view(request):
-    # Two parallel lists: ``problems`` is what we return to the public
-    # caller (label-only, no filesystem leak); ``log_problems`` carries
-    # the absolute paths so the operator can grep their app log when
-    # the LB starts seeing 503s. Don't merge the two — anything in
-    # ``problems`` is world-readable.
-    problems = []
-    log_problems = []
-    for label, path in (("skey", settings.SKEY_PATH), ("vkey", settings.VKEY_PATH)):
-        if not os.path.exists(path):
-            problems.append(f"{label} missing")
-            log_problems.append(f"{label} missing at {path}")
-        elif not os.access(path, os.R_OK):
-            problems.append(f"{label} unreadable")
-            log_problems.append(f"{label} unreadable at {path}")
-    if not os.path.exists(_known_hosts_path()):
-        problems.append("known_hosts missing")
-        log_problems.append(f"known_hosts missing at {_known_hosts_path()}")
-
+    problems = readiness_problems()
     if problems:
-        for line in log_problems:
-            logger.warning("healthz: %s", line)
         response = Response(
             {"status": "error", "problems": problems},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -330,6 +324,23 @@ def healthz_view(request):
         )
     # Don't let an upstream proxy cache "ok" past the moment the keys
     # disappear (or vice versa).
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@extend_schema(
+    operation_id="livez",
+    summary="Process liveness check",
+    description="Returns 200 whenever Django can serve requests. Never calls an upstream.",
+    responses={200: OpenApiResponse(description="Process is alive.")},
+)
+@api_view(["GET"])
+@throttle_classes([])
+def livez_view(request):
+    response = Response(
+        {"status": "ok", "version": settings.SPECTACULAR_SETTINGS["VERSION"]},
+        status=status.HTTP_200_OK,
+    )
     response["Cache-Control"] = "no-store"
     return response
 
@@ -348,7 +359,7 @@ def metrics_view(request):
         return HttpResponseNotFound()
     client_ip = _client_ip(request)
     if client_ip not in settings.METRICS_ALLOW_IPS:
-        logger.warning("Rejected /metrics from non-allowed IP: %s", client_ip)
+        logger.warning("Rejected unauthorized /metrics request")
         return HttpResponse(status=403)
     return HttpResponse(generate_latest(), content_type=CONTENT_TYPE_LATEST)
 
@@ -396,23 +407,87 @@ def landing_page(request):
 
 @require_GET
 def known_hosts_view(request):
-    """Return the full known-hosts registry as JSON. Returns ``{}`` if the
-    file is missing — that's the same response shape as an empty registry,
-    so consumers don't have to handle two cases. ``Cache-Control: no-store``
-    so an upstream proxy can't serve a stale registry after an operator
-    edit (the file is hot-reloadable; caching defeats that)."""
+    """Return the last fully validated known-hosts registry as JSON.
+
+    Returns ``{}`` if the file has never existed, so consumers don't have to
+    handle a second shape. ``Cache-Control: no-store`` prevents an upstream
+    proxy from serving stale discovery data after a hot reload.
+    """
     response = JsonResponse(_load_known_hosts())
     response["Cache-Control"] = "no-store"
     return response
 
 
+def _wants_json(request) -> bool:
+    """True when the caller is an API client rather than a browsing human.
+
+    Deciding on ``"text/html" in accept`` is wrong for the case that matters
+    most here: an SDK forwarding an end user's header sends
+    ``application/json, text/html;q=0.1``, which contains ``text/html`` while
+    clearly preferring JSON. Browsers put ``text/html`` first, so compare the
+    stated preferences instead. Ties favour JSON — a client that expressed no
+    preference is better served by a parseable error than by a redirect.
+
+    Anything under a configured network prefix is API surface regardless of
+    headers.
+    """
+    if COLLATERAL_PATH_RE.match(request.path):
+        return True
+
+    html_quality = json_quality = 0.0
+    for part in request.META.get("HTTP_ACCEPT", "").split(","):
+        media_type, _, parameters = part.strip().partition(";")
+        media_type = media_type.strip().lower()
+        quality = 1.0
+        for parameter in parameters.split(";"):
+            name, _, value = parameter.partition("=")
+            if name.strip().lower() == "q":
+                try:
+                    quality = float(value)
+                except ValueError:
+                    quality = 0.0
+        if media_type in ("text/html", "application/xhtml+xml"):
+            html_quality = max(html_quality, quality)
+        elif media_type in ("application/json", "application/*", "*/*"):
+            json_quality = max(json_quality, quality)
+
+    return html_quality <= json_quality
+
+
 def custom_page_not_found(request, exception):
+    """Redirect humans to the landing page; give API clients a real 404.
+
+    Redirecting everything was actively misleading: every mainstream HTTP
+    client follows redirects by default, so a mistyped collateral URL returned
+    302 -> 200 and an HTML landing page where the integrator expected an
+    error. They would see a success status for a request that never reached
+    the endpoint.
+    """
+    if request.method not in ("GET", "HEAD") or _wants_json(request):
+        return JsonResponse({"detail": "Not Found"}, status=404)
     return redirect("/")
+
+
+def custom_server_error(request):
+    """Keep the {"detail": ...} envelope for errors that escape DRF.
+
+    DRF's exception handler returns None for anything that is not an
+    APIException, which re-raises into Django's default HTML 500 page. Django
+    calls this with no exception argument, and it must never raise — so it
+    renders no template and reads no settings.
+    """
+    logger.error("Unhandled server error at %s", request.path)
+    return JsonResponse(
+        {"detail": "Internal Server Error"},
+        status=500,
+    )
 
 
 def custom_disallowed_host_handler(request, exception):
     # request.get_host() can itself raise DisallowedHost; pull the raw
-    # header instead so we always log something useful.
+    # header instead so we always log something useful. Answer in the same
+    # {"detail": ...} envelope as every other error so a misconfigured proxy
+    # doesn't hand the integrator an unparseable body.
     raw = request.META.get("HTTP_HOST", "<missing>")
     logger.warning("DisallowedHost: %s", raw)
-    return HttpResponseBadRequest("Invalid Host Header")
+    return JsonResponse({"detail": "Invalid Host Header"}, status=400)

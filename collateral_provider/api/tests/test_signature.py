@@ -1,7 +1,9 @@
 import os
 import tempfile
 import time
+from io import BytesIO
 
+import cbor2
 from django.test import TestCase
 
 from api.signature import (
@@ -10,7 +12,9 @@ from api.signature import (
     get_key_from_file,
     sign,
     tx_id,
+    validate_key_material,
     verify,
+    witness_tx_cbor,
 )
 from api.tests.test_data import (
     invalid_tx_body_missing_collateral,
@@ -19,6 +23,41 @@ from api.tests.test_data import (
 
 
 class SignatureTestCase(TestCase):
+
+    def test_body_hash_does_not_bind_outer_validity_or_witnesses(self):
+        """Document the ledger boundary behind the collateral policy.
+
+        Vkey witnesses sign the body only. The outer phase-2 validity flag
+        and witness set may change without changing the transaction id; the
+        ledger, not this signature, enforces that the flag matches script
+        evaluation.
+        """
+        original = valid_tx_body_cbor_with_collateral()
+        original_bytes = bytes.fromhex(original)
+        decoded = cbor2.loads(original_bytes)
+        stream = BytesIO(original_bytes)
+        self.assertEqual(stream.read(1), b"\x84")
+        body_start = stream.tell()
+        cbor2.CBORDecoder(stream).decode()
+        body_bytes = original_bytes[body_start : stream.tell()]
+
+        changed_validity = (
+            b"\x84"
+            + body_bytes
+            + cbor2.dumps(decoded[1])
+            + cbor2.dumps(not decoded[2])
+            + cbor2.dumps(decoded[3])
+        ).hex()
+        self.assertEqual(tx_id(original), tx_id(changed_validity))
+
+        changed_witnesses = (
+            b"\x84"
+            + body_bytes
+            + cbor2.dumps({0: [[bytes(32), bytes(64)]]})
+            + cbor2.dumps(decoded[2])
+            + cbor2.dumps(decoded[3])
+        ).hex()
+        self.assertEqual(tx_id(original), tx_id(changed_witnesses))
 
     def test_verify_works_on_good_signature(self):
         pk = "7EE70C8FF8CABD12E8453C942D65D5D5B504CC658028981F5EC16664D7B0ACBD"
@@ -90,6 +129,66 @@ class GetKeyFromFileTestCase(TestCase):
     def setUp(self):
         _clear_key_cache()
 
+    def _key_files(self, skey_hex, vkey_hex):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".skey", delete=False) as skey:
+            skey.write('{"cborHex":"5820' + skey_hex + '"}')
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".vkey", delete=False) as vkey:
+            vkey.write('{"cborHex":"5820' + vkey_hex + '"}')
+        self.addCleanup(os.unlink, skey.name)
+        self.addCleanup(os.unlink, vkey.name)
+        return skey.name, vkey.name
+
+    def _atomic_replace_key(self, path: str, value: str, mtime_ns: int) -> None:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".key",
+            dir=os.path.dirname(path),
+            delete=False,
+        ) as replacement:
+            replacement.write('{"cborHex":"5820' + value + '"}')
+            replacement_path = replacement.name
+        try:
+            os.utime(replacement_path, ns=(mtime_ns, mtime_ns))
+            os.replace(replacement_path, path)
+        finally:
+            if os.path.exists(replacement_path):
+                os.unlink(replacement_path)
+
+    def test_validates_consistent_signing_identity(self):
+        skey = "00" * 32
+        vkey = "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
+        pkh = "cb9358529df4729c3246a2a033cb9821abbfd16de4888005904abc41"
+        paths = self._key_files(skey, vkey)
+        validate_key_material(*paths, pkh)
+
+    def test_rejects_vkey_that_does_not_match_skey(self):
+        paths = self._key_files("00" * 32, "00" * 32)
+        with self.assertRaisesRegex(ValueError, "does not match signing key"):
+            validate_key_material(*paths, "00" * 28)
+
+    def test_rejects_pkh_that_does_not_match_vkey(self):
+        vkey = "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
+        paths = self._key_files("00" * 32, vkey)
+        with self.assertRaisesRegex(ValueError, "PKH does not match"):
+            validate_key_material(*paths, "00" * 28)
+
+    def test_witness_derives_public_key_from_signing_key_and_checks_pkh(self):
+        skey = "00" * 32
+        vkey = "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
+        pkh = "cb9358529df4729c3246a2a033cb9821abbfd16de4888005904abc41"
+        skey_path, _ = self._key_files(skey, vkey)
+
+        witness, _ = witness_tx_cbor(
+            valid_tx_body_cbor_with_collateral(), skey_path, pkh
+        )
+        decoded = cbor2.loads(bytes.fromhex(witness))
+        self.assertEqual(decoded[1][0].hex(), vkey)
+
+        with self.assertRaisesRegex(ValueError, "does not match configured PKH"):
+            witness_tx_cbor(
+                valid_tx_body_cbor_with_collateral(), skey_path, "00" * 28
+            )
+
     def test_strips_cbor_tag_prefix(self):
         # 5820 is the CBOR tag for "byte string of length 32" — the leading 4
         # hex chars in the cborHex value. The rest is the raw key material.
@@ -117,10 +216,10 @@ class GetKeyFromFileTestCase(TestCase):
             path = f.name
         try:
             first = get_key_from_file(path)
-            mtime_before = os.path.getmtime(path)
+            stat_before = os.stat(path)
             with open(path, "w") as f:
                 f.write('{"cborHex": "5820' + "ef" * 32 + '"}')
-            os.utime(path, (mtime_before, mtime_before))
+            os.utime(path, ns=(stat_before.st_atime_ns, stat_before.st_mtime_ns))
             second = get_key_from_file(path)
             self.assertEqual(first, second)
         finally:
@@ -149,3 +248,91 @@ class GetKeyFromFileTestCase(TestCase):
         finally:
             os.unlink(path)
 
+    def test_reloads_equal_mtime_atomic_replacement(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".skey", delete=False) as f:
+            f.write('{"cborHex": "5820' + "11" * 32 + '"}')
+            path = f.name
+        try:
+            self.assertEqual(get_key_from_file(path), "11" * 32)
+            original = os.stat(path)
+
+            self._atomic_replace_key(path, "22" * 32, original.st_mtime_ns)
+
+            replacement = os.stat(path)
+            self.assertNotEqual(replacement.st_ino, original.st_ino)
+            self.assertEqual(replacement.st_mtime_ns, original.st_mtime_ns)
+            self.assertEqual(get_key_from_file(path), "22" * 32)
+        finally:
+            os.unlink(path)
+
+    def test_reloads_older_mtime_atomic_replacement(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".skey", delete=False) as f:
+            f.write('{"cborHex": "5820' + "11" * 32 + '"}')
+            path = f.name
+        try:
+            self.assertEqual(get_key_from_file(path), "11" * 32)
+            original = os.stat(path)
+            older_mtime_ns = max(0, original.st_mtime_ns - 1_000_000_000)
+
+            self._atomic_replace_key(path, "22" * 32, older_mtime_ns)
+
+            self.assertLessEqual(os.stat(path).st_mtime_ns, original.st_mtime_ns)
+            self.assertEqual(get_key_from_file(path), "22" * 32)
+        finally:
+            os.unlink(path)
+
+
+class WitnessVerifiesTestCase(TestCase):
+    """Close the loop on the service's one deliverable.
+
+    Existing coverage checks key derivation and the witness CBOR shape
+    separately, but nothing asserted that the signature actually verifies
+    against the body hash under the returned public key. That composition is
+    the entire product: a witness that does not verify is silently useless to
+    every caller, and no other test would notice.
+    """
+
+    def setUp(self):
+        _clear_key_cache()
+        self.addCleanup(_clear_key_cache)
+        self.seed = "11" * 32
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".skey", delete=False) as f:
+            f.write('{"cborHex": "5820' + self.seed + '"}')
+            self.skey_path = f.name
+        self.addCleanup(os.unlink, self.skey_path)
+
+        import hashlib
+
+        from nacl.signing import SigningKey
+
+        self.public_key = bytes(SigningKey(bytes.fromhex(self.seed)).verify_key)
+        self.pkh = hashlib.blake2b(self.public_key, digest_size=28).hexdigest()
+
+    def test_witness_signature_verifies_against_tx_body_hash(self):
+        tx = valid_tx_body_cbor_with_collateral()
+        witness_hex, tx_hash = witness_tx_cbor(tx, self.skey_path, self.pkh)
+
+        tag, (pubkey, signature) = cbor2.loads(bytes.fromhex(witness_hex))
+        self.assertEqual(tag, 0)
+        self.assertEqual(pubkey, self.public_key)
+        self.assertEqual(len(signature), 64)
+
+        # The chain a wallet actually walks: the returned key must be the
+        # advertised identity, and the signature must verify over the hash of
+        # the exact submitted body bytes.
+        self.assertEqual(tx_hash, tx_id(tx))
+        self.assertTrue(verify(pubkey.hex(), signature.hex(), tx_hash))
+
+    def test_witness_does_not_verify_against_a_different_body(self):
+        tx = valid_tx_body_cbor_with_collateral()
+        witness_hex, _ = witness_tx_cbor(tx, self.skey_path, self.pkh)
+        _, (pubkey, signature) = cbor2.loads(bytes.fromhex(witness_hex))
+
+        other_hash = tx_id(invalid_tx_body_missing_collateral())
+        self.assertFalse(verify(pubkey.hex(), signature.hex(), other_hash))
+
+    def test_refuses_to_sign_when_key_does_not_match_configured_pkh(self):
+        with self.assertRaises(ValueError):
+            witness_tx_cbor(
+                valid_tx_body_cbor_with_collateral(), self.skey_path, "ab" * 28
+            )

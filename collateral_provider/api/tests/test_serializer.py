@@ -28,59 +28,27 @@ class ProvideCollateralSerializerShapeTestCase(TestCase):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         self.assertEqual(serializer.validated_data['tx'], 'deadbeef')
 
-    def test_additional_utxos_optional(self):
+    def test_additional_utxos_may_be_omitted(self):
         serializer = ProvideCollateralSerializer(data={'tx': 'deadbeef'})
         self.assertTrue(serializer.is_valid(), serializer.errors)
         self.assertNotIn('additional_utxos', serializer.validated_data)
 
-    def test_additional_utxos_empty_list_normalized_to_none(self):
+    def test_empty_additional_utxos_is_accepted_for_compatibility(self):
         serializer = ProvideCollateralSerializer(
             data={'tx': 'deadbeef', 'additional_utxos': []}
         )
         self.assertTrue(serializer.is_valid(), serializer.errors)
         self.assertIsNone(serializer.validated_data['additional_utxos'])
 
-    def test_additional_utxos_pair_shape_required(self):
-        serializer = ProvideCollateralSerializer(data={
-            'tx': 'deadbeef',
-            'additional_utxos': [[{'transaction': {'id': 'a' * 64}, 'index': 0}]],
-        })
-        self.assertFalse(serializer.is_valid())
-        self.assertIn('additional_utxos', serializer.errors)
-
-    def test_additional_utxos_inner_must_be_objects(self):
-        serializer = ProvideCollateralSerializer(data={
-            'tx': 'deadbeef',
-            'additional_utxos': [['txin-as-string', {'address': 'addr...'}]],
-        })
-        self.assertFalse(serializer.is_valid())
-        self.assertIn('additional_utxos', serializer.errors)
-
-    def test_additional_utxos_size_capped(self):
-        bloat = 'x' * 40_000
+    def test_non_empty_additional_utxos_is_always_rejected(self):
         serializer = ProvideCollateralSerializer(data={
             'tx': 'deadbeef',
             'additional_utxos': [
                 [
                     {'transaction': {'id': 'a' * 64}, 'index': 0},
-                    {'address': 'addr_test1qz...', 'memo': bloat},
+                    {'address': 'addr_test1...'},
                 ]
             ],
         })
         self.assertFalse(serializer.is_valid())
-        self.assertIn('additional_utxos', serializer.errors)
-
-    def test_additional_utxos_count_capped(self):
-        # Many tiny pairs would pass the byte cap but still make Koios
-        # chew through hundreds of UTxOs per request. The count cap
-        # (currently 400) catches this orthogonal case.
-        from api.serializers import ADDITIONAL_UTXOS_MAX_COUNT
-        too_many = [
-            [{'transaction': {'id': 'a' * 64}, 'index': 0}, {'address': 'a'}]
-        ] * (ADDITIONAL_UTXOS_MAX_COUNT + 1)
-        serializer = ProvideCollateralSerializer(data={
-            'tx': 'deadbeef',
-            'additional_utxos': too_many,
-        })
-        self.assertFalse(serializer.is_valid())
-        self.assertIn('additional_utxos', serializer.errors)
+        self.assertIn('not supported', str(serializer.errors))

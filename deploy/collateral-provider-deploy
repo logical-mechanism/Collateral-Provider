@@ -1,0 +1,486 @@
+#!/usr/bin/env bash
+# Restricted SSH deployment command for Collateral Provider.
+#
+# Install this file root-owned at /usr/local/sbin/collateral-provider-deploy
+# and force it from collateral-deploy's authorized_keys. The only accepted
+# command is `deploy <40-character-lowercase-commit-sha>`; a git archive is
+# read from stdin. This account must not be able to read the runtime signing
+# keys or application environment.
+
+set -Eeuo pipefail
+IFS=$'\n\t'
+umask 027
+readonly PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+unset BASH_ENV CDPATH ENV GLOBIGNORE PYTHONHOME PYTHONPATH PYTHONSTARTUP
+
+readonly DEPLOY_ROOT=/srv/collateral-provider
+readonly RELEASES_DIR="$DEPLOY_ROOT/releases"
+readonly CURRENT_LINK="$DEPLOY_ROOT/current"
+readonly PREVIOUS_LINK="$DEPLOY_ROOT/previous"
+readonly LOCK_FILE="$DEPLOY_ROOT/.deploy.lock"
+readonly PIP_CACHE_DIR="$DEPLOY_ROOT/.pip-cache"
+readonly HEALTH_HOST_FILE=/etc/collateral-provider/health-host
+readonly HEALTH_URL=http://127.0.0.1:8000/healthz
+readonly SERVICE=collateral-provider.service
+readonly PYTHON=/usr/bin/python3.12
+readonly MAX_ARCHIVE_BYTES=$((50 * 1024 * 1024))
+readonly MAX_EXPANDED_BYTES=$((512 * 1024 * 1024))
+readonly MAX_ARCHIVE_MEMBERS=20000
+readonly RETAIN_RELEASES=5
+
+log() {
+    printf '[deploy] %s\n' "$*" >&2
+}
+
+die() {
+    log "ERROR: $*"
+    exit 1
+}
+
+command_text=${SSH_ORIGINAL_COMMAND:-}
+if [[ -n "$command_text" ]]; then
+    (( $# == 0 )) || die "forced-command invocation cannot include local arguments"
+else
+    (( $# == 2 )) || die "usage: collateral-provider-deploy deploy <40-hex-sha>"
+    command_text="$1 $2"
+fi
+
+[[ "$command_text" != *$'\n'* && "$command_text" != *$'\r'* ]] \
+    || die "command contains a line break"
+IFS=' ' read -r verb release_sha extra <<<"$command_text"
+[[ "$verb" == deploy && -z "${extra:-}" ]] || die "only 'deploy <sha>' is allowed"
+[[ "$release_sha" =~ ^[0-9a-f]{40}$ ]] || die "release SHA must be 40 lowercase hex characters"
+
+for required_command in "$PYTHON" curl flock head wc mktemp readlink ln mv chmod; do
+    command -v "$required_command" >/dev/null 2>&1 \
+        || die "required command is unavailable: $required_command"
+done
+[[ -x /usr/bin/sudo && -x /usr/bin/systemctl ]] \
+    || die "/usr/bin/sudo and /usr/bin/systemctl are required"
+
+[[ -d "$DEPLOY_ROOT" && ! -L "$DEPLOY_ROOT" ]] \
+    || die "$DEPLOY_ROOT must be a real directory"
+[[ -d "$RELEASES_DIR" && ! -L "$RELEASES_DIR" ]] \
+    || die "$RELEASES_DIR must be a real directory"
+[[ -f "$HEALTH_HOST_FILE" && -r "$HEALTH_HOST_FILE" && ! -L "$HEALTH_HOST_FILE" ]] \
+    || die "$HEALTH_HOST_FILE must be a readable regular file, not a symlink"
+
+IFS= read -r health_host < "$HEALTH_HOST_FILE"
+[[ "$health_host" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+    || die "$HEALTH_HOST_FILE does not contain a valid Host value"
+
+mkdir -p -- "$PIP_CACHE_DIR"
+exec 9>"$LOCK_FILE"
+flock -n 9 || die "another deployment is already running"
+
+incoming_dir=$(mktemp -d "$DEPLOY_ROOT/.incoming.${release_sha}.XXXXXX")
+archive_path="$incoming_dir/source.tar"
+extract_dir="$incoming_dir/release"
+release_dir="$RELEASES_DIR/$release_sha"
+complete_marker="$release_dir/.deploy-complete"
+new_release=0
+building_release=0
+
+cleanup() {
+    if (( building_release == 1 )) \
+        && [[ "$release_dir" == "$RELEASES_DIR/"* \
+            && "${release_dir##*/}" =~ ^[0-9a-f]{40}$ \
+            && -d "$release_dir" \
+            && ! -L "$release_dir" ]]; then
+        rm -rf --one-file-system -- "$release_dir"
+        log "removed incomplete release $release_sha"
+    fi
+    if [[ -n "${incoming_dir:-}" \
+        && "$incoming_dir" == "$DEPLOY_ROOT/.incoming.${release_sha}."* \
+        && -d "$incoming_dir" \
+        && ! -L "$incoming_dir" ]]; then
+        rm -rf --one-file-system -- "$incoming_dir"
+    fi
+}
+trap cleanup EXIT
+
+log "receiving archive for $release_sha"
+head -c "$((MAX_ARCHIVE_BYTES + 1))" > "$archive_path"
+archive_size=$(wc -c < "$archive_path")
+(( archive_size > 0 )) || die "archive is empty"
+(( archive_size <= MAX_ARCHIVE_BYTES )) \
+    || die "archive exceeds the ${MAX_ARCHIVE_BYTES}-byte compressed limit"
+
+mkdir -- "$extract_dir"
+"$PYTHON" - "$archive_path" "$extract_dir" \
+    "$MAX_EXPANDED_BYTES" "$MAX_ARCHIVE_MEMBERS" "$release_sha" <<'PY'
+import sys
+import tarfile
+from pathlib import Path, PurePosixPath
+
+archive = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+max_bytes = int(sys.argv[3])
+max_members = int(sys.argv[4])
+expected_sha = sys.argv[5]
+members_seen: set[str] = set()
+expanded_bytes = 0
+
+try:
+    tar = tarfile.open(archive, mode="r:*")
+except (tarfile.TarError, OSError) as exc:
+    raise SystemExit(f"invalid tar archive: {exc}") from exc
+
+with tar:
+    if tar.pax_headers.get("comment") != expected_sha:
+        raise SystemExit("archive commit metadata does not match requested release SHA")
+    members = []
+    for member in tar:
+        if len(members) >= max_members:
+            raise SystemExit("archive has too many members")
+        members.append(member)
+        raw_name = member.name
+        name = raw_name.rstrip("/")
+        path = PurePosixPath(name)
+        if (
+            not name
+            or path.is_absolute()
+            or str(path) != name
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or "\\" in name
+            or any(ord(character) < 32 or ord(character) == 127 for character in name)
+        ):
+            raise SystemExit(f"unsafe archive path: {raw_name!r}")
+        if name in members_seen:
+            raise SystemExit(f"duplicate archive path: {name!r}")
+        members_seen.add(name)
+
+        # Deployment source archives contain only directories and regular
+        # files. Rejecting links and device-like entries closes off both
+        # extraction traversal and later current-release link surprises.
+        if not (member.isdir() or member.isfile()):
+            raise SystemExit(f"unsupported archive member type: {name!r}")
+        if member.size < 0:
+            raise SystemExit(f"invalid archive member size: {name!r}")
+        expanded_bytes += member.size
+        if expanded_bytes > max_bytes:
+            raise SystemExit("archive exceeds the expanded-size limit")
+
+        lowered_parts = tuple(part.lower() for part in path.parts)
+        lowered_name = path.name.lower()
+        lowered_path = path.as_posix().lower()
+        if (
+            ".git" in lowered_parts
+            or lowered_name == ".env"
+            or lowered_name.startswith(".env.")
+            or lowered_path == ".do/app.local.yaml"
+            or lowered_path in {".deploy-complete", ".deploy-complete.tmp"}
+        ):
+            raise SystemExit(f"archive contains forbidden deployment state: {name!r}")
+        if path.suffix.lower() in {".skey", ".vkey"}:
+            raise SystemExit(f"archive contains signing-key material: {name!r}")
+
+    if not members:
+        raise SystemExit("archive has no members")
+
+    try:
+        tar.extractall(destination, members=members, filter="data")
+    except (tarfile.TarError, OSError) as exc:
+        raise SystemExit(f"archive extraction failed: {exc}") from exc
+PY
+
+[[ -f "$extract_dir/requirements.txt" ]] \
+    || die "archive is missing requirements.txt"
+[[ -f "$extract_dir/collateral_provider/manage.py" ]] \
+    || die "archive is missing collateral_provider/manage.py"
+[[ -f "$extract_dir/collateral_provider/collateral_provider/wsgi.py" ]] \
+    || die "archive is missing the WSGI application"
+
+# Source is intentionally readable by the runtime account, but never writable
+# by it. The deploy account is not a member of the runtime key-reading group.
+chmod -R g+rX,o+rX,go-w -- "$extract_dir"
+
+reuse_release=0
+if [[ -e "$release_dir" || -L "$release_dir" ]]; then
+    [[ -d "$release_dir" && ! -L "$release_dir" ]] \
+        || die "existing release path is not a real directory: $release_dir"
+    marker_sha=''
+    if [[ -f "$complete_marker" && ! -L "$complete_marker" ]]; then
+        IFS= read -r marker_sha < "$complete_marker" || true
+    fi
+    if [[ "$marker_sha" == "$release_sha" \
+        && -x "$release_dir/.venv/bin/gunicorn" \
+        && -f "$release_dir/collateral_provider/manage.py" ]]; then
+        reuse_release=1
+    else
+        # A power loss or SIGKILL can bypass the EXIT trap during a build.
+        # The marker is written last, so an unmarked SHA directory is safe to
+        # discard and rebuild while the deployment flock is held.
+        for managed_link in "$CURRENT_LINK" "$PREVIOUS_LINK"; do
+            if [[ -L "$managed_link" ]]; then
+                linked_release=$(readlink -f -- "$managed_link") \
+                    || die "cannot resolve $managed_link before incomplete-release cleanup"
+                [[ "$linked_release" != "$release_dir" ]] \
+                    || die "refusing to remove incomplete release referenced by $managed_link"
+            elif [[ -e "$managed_link" ]]; then
+                die "$managed_link must be a symlink"
+            fi
+        done
+        rm -rf --one-file-system -- "$release_dir"
+        log "removed incomplete release $release_sha before rebuilding"
+    fi
+fi
+
+if (( reuse_release == 1 )); then
+    log "reusing already-built immutable release $release_sha"
+else
+    log "building release $release_sha"
+    # Python console-script shebangs contain the virtualenv's absolute path,
+    # so build in the final immutable SHA directory rather than moving an
+    # already-created virtualenv out of the incoming directory.
+    building_release=1
+    mv -T -- "$extract_dir" "$release_dir"
+    new_release=1
+    "$PYTHON" -m venv "$release_dir/.venv"
+    PIP_CACHE_DIR="$PIP_CACHE_DIR" PIP_REQUIRE_VIRTUALENV=true \
+        "$release_dir/.venv/bin/python" -m pip install \
+        --disable-pip-version-check --no-input --no-deps \
+        --requirement "$release_dir/requirements.txt"
+    "$release_dir/.venv/bin/python" -m pip check
+
+    dummy_key_dir="$incoming_dir/dummy-keys"
+    dummy_cache_dir="$incoming_dir/dummy-cache"
+    mkdir -- "$dummy_key_dir" "$dummy_cache_dir"
+    printf '%s\n' \
+        '{"type":"PaymentSigningKeyShelley_ed25519","description":"deploy check only","cborHex":"58200000000000000000000000000000000000000000000000000000000000000000"}' \
+        > "$dummy_key_dir/payment.skey"
+    printf '%s\n' \
+        '{"type":"PaymentVerificationKeyShelley_ed25519","description":"deploy check only","cborHex":"58203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"}' \
+        > "$dummy_key_dir/payment.vkey"
+    chmod 600 "$dummy_key_dir/payment.skey" "$dummy_key_dir/payment.vkey"
+
+    run_manage() {
+        (
+            export PKH=cb9358529df4729c3246a2a033cb9821abbfd16de4888005904abc41
+            export DJANGO_SECRET_KEY=deployment-check-only-not-a-runtime-secret
+            export ENVIRONMENT=development
+            export ALLOWED_HOSTS=localhost
+            export PREPROD_TXID=0000000000000000000000000000000000000000000000000000000000000000
+            export PREPROD_TXIDX=0
+            export PREPROD_NETWORK='--testnet-magic 1'
+            export MAINNET_TXID=0000000000000000000000000000000000000000000000000000000000000000
+            export MAINNET_TXIDX=0
+            export MAINNET_NETWORK=--mainnet
+            export SKEY_PATH="$dummy_key_dir/payment.skey"
+            export VKEY_PATH="$dummy_key_dir/payment.vkey"
+            export CACHE_DIR="$dummy_cache_dir"
+            export LOG_TO_CONSOLE=True
+            export LOG_LEVEL=INFO
+            cd "$release_dir/collateral_provider"
+            "$release_dir/.venv/bin/python" manage.py "$@"
+        )
+    }
+
+    run_manage check --deploy
+    "$release_dir/.venv/bin/python" -m compileall -q "$release_dir/collateral_provider"
+    run_manage collectstatic --noinput --clear
+    chmod -R g+rX,o+rX,go-w -- "$release_dir"
+    [[ -x "$release_dir/.venv/bin/gunicorn" ]] \
+        || die "built release is missing its gunicorn executable"
+    printf '%s\n' "$release_sha" > "$release_dir/.deploy-complete.tmp"
+    chmod 0444 "$release_dir/.deploy-complete.tmp"
+    mv -T -- "$release_dir/.deploy-complete.tmp" "$complete_marker"
+
+    building_release=0
+    log "installed immutable release $release_sha"
+fi
+
+resolve_release_link() {
+    local link_path=$1
+    local resolved
+    if [[ ! -L "$link_path" ]]; then
+        [[ ! -e "$link_path" ]] || die "$link_path must be a symlink"
+        return 1
+    fi
+    resolved=$(readlink -- "$link_path") || die "cannot read $link_path"
+    [[ "$resolved" =~ ^/srv/collateral-provider/releases/[0-9a-f]{40}$ \
+        && -d "$resolved" \
+        && ! -L "$resolved" ]] \
+        || die "$link_path points outside the managed releases directory"
+    printf '%s\n' "$resolved"
+}
+
+atomic_link() {
+    local target=$1
+    local link_path=$2
+    local temporary_link="${link_path}.new.${release_sha}.${BASHPID}"
+    [[ ! -e "$temporary_link" && ! -L "$temporary_link" ]] \
+        || die "temporary link already exists: $temporary_link"
+    ln -sT -- "$target" "$temporary_link"
+    if ! mv -Tf -- "$temporary_link" "$link_path"; then
+        unlink -- "$temporary_link" || true
+        die "could not update $link_path"
+    fi
+}
+
+clear_link() {
+    local link_path=$1
+    if [[ -L "$link_path" ]]; then
+        unlink -- "$link_path"
+    elif [[ -e "$link_path" ]]; then
+        die "$link_path must be a symlink"
+    fi
+}
+
+old_current=''
+old_previous=''
+if [[ -e "$CURRENT_LINK" || -L "$CURRENT_LINK" ]]; then
+    old_current=$(resolve_release_link "$CURRENT_LINK")
+fi
+if [[ -e "$PREVIOUS_LINK" || -L "$PREVIOUS_LINK" ]]; then
+    old_previous=$(resolve_release_link "$PREVIOUS_LINK")
+fi
+
+health_once() {
+    local response
+    response=$(curl --fail --silent --show-error \
+        --connect-timeout 1 --max-time 2 --max-filesize 4096 \
+        --noproxy '*' --header "Host: $health_host" "$HEALTH_URL" 2>/dev/null) \
+        || return 1
+    "$PYTHON" -c \
+        'import json,sys; raise SystemExit(0 if json.load(sys.stdin).get("status") == "ok" else 1)' \
+        2>/dev/null <<<"$response"
+}
+
+wait_for_health() {
+    local deadline=$((SECONDS + 30))
+    while (( SECONDS < deadline )); do
+        health_once && return 0
+        sleep 1
+    done
+    return 1
+}
+
+restart_service() {
+    # A fast-crashing candidate can exhaust systemd's start-rate limit during
+    # the readiness window. Reset it before both candidate and rollback starts
+    # so a healthy previous release is never stranded behind that limiter.
+    /usr/bin/sudo -n /usr/bin/systemctl reset-failed "$SERVICE" \
+        && /usr/bin/sudo -n /usr/bin/systemctl restart "$SERVICE"
+}
+
+same_release=0
+if [[ "$old_current" == "$release_dir" ]]; then
+    # A prior deploy may have crashed after switching the symlink but before
+    # restarting systemd. Always restart; a healthy old process alone is not
+    # proof that this release has booted.
+    same_release=1
+else
+    if [[ -n "$old_current" ]]; then
+        atomic_link "$old_current" "$PREVIOUS_LINK"
+    else
+        clear_link "$PREVIOUS_LINK"
+    fi
+    atomic_link "$release_dir" "$CURRENT_LINK"
+fi
+
+log "restarting $SERVICE"
+if restart_service && wait_for_health; then
+    log "release $release_sha is healthy"
+else
+    log "release $release_sha failed readiness; restoring the prior links"
+    if (( same_release == 1 )); then
+        if [[ -n "$old_previous" && "$old_previous" != "$old_current" ]]; then
+            atomic_link "$old_current" "$PREVIOUS_LINK"
+            atomic_link "$old_previous" "$CURRENT_LINK"
+            if restart_service && wait_for_health; then
+                log "rollback to ${old_previous##*/} is healthy"
+                die "deployment failed readiness and was rolled back"
+            fi
+            # Preserve the pre-deploy link state if neither release starts.
+            atomic_link "$old_current" "$CURRENT_LINK"
+            atomic_link "$old_previous" "$PREVIOUS_LINK"
+            die "deployment and rollback readiness both failed; inspect the service journal"
+        fi
+        die "current release failed after restart and no distinct previous release is available"
+    fi
+
+    if [[ -n "$old_current" ]]; then
+        atomic_link "$old_current" "$CURRENT_LINK"
+    else
+        clear_link "$CURRENT_LINK"
+    fi
+    if [[ -n "$old_previous" ]]; then
+        atomic_link "$old_previous" "$PREVIOUS_LINK"
+    else
+        clear_link "$PREVIOUS_LINK"
+    fi
+
+    rollback_healthy=0
+    if [[ -n "$old_current" ]]; then
+        if restart_service && wait_for_health; then
+            rollback_healthy=1
+            log "rollback to ${old_current##*/} is healthy"
+        fi
+    else
+        # There is no prior release to restore. Do not remove the candidate
+        # until systemd confirms that its process has stopped using it.
+        if /usr/bin/sudo -n /usr/bin/systemctl stop "$SERVICE"; then
+            rollback_healthy=1
+            log "failed first release was stopped and detached; the service remains unavailable"
+        else
+            die "failed first release could not be stopped; preserving it for investigation"
+        fi
+    fi
+
+    if (( new_release == 1 && rollback_healthy == 1 )); then
+        [[ "$release_dir" == "$RELEASES_DIR/"* \
+            && "${release_dir##*/}" =~ ^[0-9a-f]{40}$ \
+            && -d "$release_dir" \
+            && ! -L "$release_dir" ]] \
+            || die "refusing to remove an unexpected failed-release path"
+        rm -rf --one-file-system -- "$release_dir"
+        log "removed failed release $release_sha; it can be redeployed"
+    fi
+    (( rollback_healthy == 1 )) \
+        || die "deployment and rollback readiness both failed; inspect the service journal"
+    die "deployment failed readiness and was rolled back"
+fi
+
+# Keep the current and previous releases plus the newest releases up to the
+# configured total. Only non-symlink directories named as exact SHAs can be
+# removed, and current/previous are resolved and protected first.
+"$PYTHON" - "$RELEASES_DIR" "$CURRENT_LINK" "$PREVIOUS_LINK" "$RETAIN_RELEASES" <<'PY'
+import re
+import shutil
+import sys
+from pathlib import Path
+
+releases = Path(sys.argv[1]).resolve(strict=True)
+links = (Path(sys.argv[2]), Path(sys.argv[3]))
+retain = int(sys.argv[4])
+protected = set()
+for link in links:
+    if link.is_symlink():
+        target = link.resolve(strict=True)
+        if target.parent != releases:
+            raise SystemExit(f"refusing retention: {link} escapes {releases}")
+        protected.add(target)
+
+candidates = []
+for entry in releases.iterdir():
+    if entry.is_symlink() or not entry.is_dir() or not re.fullmatch(r"[0-9a-f]{40}", entry.name):
+        continue
+    candidates.append(entry)
+candidates.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
+
+kept = set(protected)
+for candidate in candidates:
+    if candidate in kept:
+        continue
+    if len(kept) < retain:
+        kept.add(candidate)
+        continue
+    if candidate.parent != releases:
+        raise SystemExit(f"refusing to remove unexpected path: {candidate}")
+    shutil.rmtree(candidate)
+    print(f"[deploy] removed expired release {candidate.name}", file=sys.stderr)
+PY
+
+log "deployment complete: $release_sha"

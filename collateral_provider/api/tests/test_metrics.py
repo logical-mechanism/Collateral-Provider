@@ -6,6 +6,7 @@ operator turns the flag on, and even then must only respond to
 allow-listed source IPs.
 """
 
+import json
 from unittest.mock import patch
 
 from django.core.cache import cache
@@ -93,6 +94,22 @@ class TestMetricsMiddleware(TestCase):
         after = self._total_collateral_requests()
         self.assertEqual(before, after)
 
+    def test_unknown_route_values_share_one_bounded_environment_label(self):
+        unknown_before = self._counter_value("unknown", "400")
+        attacker_values = ("unconfigured-label-a91c", "unconfigured-label-b72d")
+
+        for environment in attacker_values:
+            response = self.client.post(
+                f"/{environment}/collateral/",
+                {"tx": "deadbeef"},
+                format="json",
+            )
+            self.assertEqual(response.status_code, 400)
+
+        self.assertEqual(self._counter_value("unknown", "400") - unknown_before, 2)
+        for environment in attacker_values:
+            self.assertFalse(self._environment_label_exists(environment))
+
     def _counter_value(self, env: str, status: str) -> float:
         from api.metrics import http_requests_total
         for metric in http_requests_total.collect():
@@ -114,6 +131,16 @@ class TestMetricsMiddleware(TestCase):
                     total += sample.value
         return total
 
+    def _environment_label_exists(self, environment: str) -> bool:
+        from api.metrics import http_request_duration_seconds, http_requests_total
+
+        return any(
+            sample.labels.get("environment") == environment
+            for collector in (http_requests_total, http_request_duration_seconds)
+            for metric in collector.collect()
+            for sample in metric.samples
+        )
+
 
 class TestKoiosMetricsRecorded(TestCase):
     """Each branch of the simulate.evaluate_transaction try/except should
@@ -125,9 +152,19 @@ class TestKoiosMetricsRecorded(TestCase):
         from api.simulate import evaluate_transaction
 
         mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {"result": []}
+        body = {
+            "id": "metrics-test-rpc-id",
+            "jsonrpc": "2.0",
+            "method": "evaluateTransaction",
+            "result": [],
+        }
+        mock_post.return_value.headers = {}
+        mock_post.return_value.iter_content.return_value = [
+            json.dumps(body).encode("utf-8")
+        ]
         before = self._koios_outcome_value("preprod", "success")
-        evaluate_transaction("deadbeef", "preprod")
+        with patch("api.simulate.secrets.token_hex", return_value="metrics-test-rpc-id"):
+            evaluate_transaction("deadbeef", "preprod")
         after = self._koios_outcome_value("preprod", "success")
         self.assertEqual(after - before, 1)
 
@@ -136,9 +173,19 @@ class TestKoiosMetricsRecorded(TestCase):
         from api.simulate import evaluate_transaction
 
         mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {"error": {"code": -32602}}
+        body = {
+            "id": "metrics-test-rpc-id",
+            "jsonrpc": "2.0",
+            "method": "evaluateTransaction",
+            "error": {"code": -32602},
+        }
+        mock_post.return_value.headers = {}
+        mock_post.return_value.iter_content.return_value = [
+            json.dumps(body).encode("utf-8")
+        ]
         before = self._koios_outcome_value("preprod", "tx_invalid")
-        evaluate_transaction("deadbeef", "preprod")
+        with patch("api.simulate.secrets.token_hex", return_value="metrics-test-rpc-id"):
+            evaluate_transaction("deadbeef", "preprod")
         after = self._koios_outcome_value("preprod", "tx_invalid")
         self.assertEqual(after - before, 1)
 

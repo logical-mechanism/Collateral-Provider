@@ -68,3 +68,48 @@ class TestHealthz(TestCase):
     def test_healthz_method_not_allowed_on_post(self):
         response = self.client.post(self.url)
         self.assertEqual(response.status_code, 405)
+
+    @override_settings(KNOWN_HOSTS_PATH="/nonexistent/known.hosts.json")
+    def test_known_hosts_registry_is_not_a_signing_dependency(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+    @override_settings(
+        SKEY_PATH="/nonexistent/payment.skey",
+        VKEY_PATH="/nonexistent/payment.vkey",
+    )
+    def test_livez_stays_up_when_readiness_fails(self):
+        response = self.client.get("/livez")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+        self.assertEqual(response["Cache-Control"], "no-store")
+
+
+@override_settings(ALLOWED_HOSTS=["testserver"])
+class ReadinessCoversThrottleCacheTestCase(TestCase):
+    """A broken throttle cache must fail readiness, not just requests.
+
+    CACHE_DIR defaults inside the release tree, which the shipped systemd
+    unit mounts read-only. Before this probe existed, such a deploy passed
+    /healthz, satisfied the deploy script's readiness gate, never rolled
+    back, and then 500'd on every collateral POST.
+    """
+
+    def test_unwritable_cache_reports_unready(self):
+        with override_settings(
+            CACHES={
+                "default": {
+                    "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+                    "LOCATION": "/proc/definitely-not-writable/cache",
+                }
+            }
+        ):
+            response = self.client.get("/healthz")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["status"], "error")
+        self.assertIn("throttle cache", " ".join(response.json()["problems"]))
+
+    def test_healthy_cache_reports_ok(self):
+        response = self.client.get("/healthz")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")

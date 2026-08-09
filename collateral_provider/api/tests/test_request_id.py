@@ -34,15 +34,35 @@ class TestRequestIDMiddleware(TestCase):
         response = self.middleware(request)
         self.assertEqual(response["X-Request-ID"], "trace-abc-123")
 
-    def test_truncates_overlong_client_header(self):
-        # Cap at MAX_INCOMING_LEN to prevent log-pumping.
+    def test_replaces_overlong_client_header(self):
+        # Mint instead of truncating: two long IDs with the same prefix must
+        # not collapse into one operator-visible correlation ID.
         long_id = "x" * 5000
         request = self.factory.get("/", HTTP_X_REQUEST_ID=long_id)
         response = self.middleware(request)
-        self.assertEqual(
-            len(response["X-Request-ID"]),
-            RequestIDMiddleware.MAX_INCOMING_LEN,
-        )
+        self.assertRegex(response["X-Request-ID"], r"^[0-9a-f]{12}$")
+        self.assertNotEqual(response["X-Request-ID"], long_id[:12])
+
+    def test_accepts_safe_id_at_maximum_length(self):
+        incoming = "a" + ("Z9._:-" * 11)[: RequestIDMiddleware.MAX_INCOMING_LEN - 1]
+        self.assertEqual(len(incoming), RequestIDMiddleware.MAX_INCOMING_LEN)
+        request = self.factory.get("/", HTTP_X_REQUEST_ID=incoming)
+        response = self.middleware(request)
+        self.assertEqual(response["X-Request-ID"], incoming)
+
+    def test_replaces_log_injection_characters(self):
+        incoming = "trace-ok\nWARNING forged-log-entry"
+        request = self.factory.get("/", HTTP_X_REQUEST_ID=incoming)
+        response = self.middleware(request)
+        self.assertRegex(response["X-Request-ID"], r"^[0-9a-f]{12}$")
+        self.assertNotIn("\n", response["X-Request-ID"])
+
+    def test_replaces_non_ascii_and_structured_log_punctuation(self):
+        for incoming in ('trace"fake":true', "trace/../../etc", "trace-☃"):
+            with self.subTest(incoming=incoming):
+                request = self.factory.get("/", HTTP_X_REQUEST_ID=incoming)
+                response = self.middleware(request)
+                self.assertRegex(response["X-Request-ID"], r"^[0-9a-f]{12}$")
 
     def test_id_set_during_request_cleared_after(self):
         seen = {}

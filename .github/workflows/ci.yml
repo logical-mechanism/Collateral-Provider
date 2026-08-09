@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,9 +21,11 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: pip
@@ -40,7 +46,7 @@ jobs:
       - name: Create test .env
         run: |
           cat > collateral_provider/.env <<'EOF'
-          PKH=6bbdaa10bda87cea060db64569c7e7b9766e896c4bdd8584e6544d71
+          PKH=cb9358529df4729c3246a2a033cb9821abbfd16de4888005904abc41
           DJANGO_SECRET_KEY=ci-secret-key-not-for-production
           ENVIRONMENT=development
           ALLOWED_HOSTS=
@@ -53,17 +59,21 @@ jobs:
           EOF
 
       - name: Create dummy signing keys
-        # All-zero "keys" — obviously not usable for anything real, and
-        # deterministic so a CI failure can be reproduced exactly.
+          # Deterministic zero seed and its real derived public key. These are
+          # obviously not usable for anything real, while still exercising the
+          # startup consistency checks.
         # Real keys are local-only and never enter this repo.
         run: |
           mkdir -p collateral_provider/api/key
           ZEROS="0000000000000000000000000000000000000000000000000000000000000000"
           printf '{"type":"PaymentSigningKeyShelley_ed25519","description":"CI dummy — not real","cborHex":"5820%s"}' "$ZEROS" > collateral_provider/api/key/payment.skey
-          printf '{"type":"PaymentVerificationKeyShelley_ed25519","description":"CI dummy — not real","cborHex":"5820%s"}' "$ZEROS" > collateral_provider/api/key/payment.vkey
+          printf '{"type":"PaymentVerificationKeyShelley_ed25519","description":"CI dummy — not real","cborHex":"5820%s"}' "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29" > collateral_provider/api/key/payment.vkey
 
       - name: Lint (ruff)
         run: ruff check collateral_provider/
+
+      - name: Syntax check deployment helper
+        run: bash -n deploy/collateral-provider-deploy
 
       - name: Run tests
         working-directory: collateral_provider
@@ -92,7 +102,9 @@ jobs:
     needs: ci
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Build image
         run: docker build -t collateral-provider:ci .
@@ -104,11 +116,13 @@ jobs:
         # or the container dies during startup.
         run: |
           ZEROS="0000000000000000000000000000000000000000000000000000000000000000"
+          VKEY="3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
+          PKH="cb9358529df4729c3246a2a033cb9821abbfd16de4888005904abc41"
           SKEY_JSON='{"type":"PaymentSigningKeyShelley_ed25519","description":"CI dummy — not real","cborHex":"5820'$ZEROS'"}'
-          VKEY_JSON='{"type":"PaymentVerificationKeyShelley_ed25519","description":"CI dummy — not real","cborHex":"5820'$ZEROS'"}'
+          VKEY_JSON='{"type":"PaymentVerificationKeyShelley_ed25519","description":"CI dummy — not real","cborHex":"5820'$VKEY'"}'
 
           docker run -d --name app -p 8080:8080 \
-            -e PKH=$ZEROS \
+            -e PKH=$PKH \
             -e DJANGO_SECRET_KEY=ci-secret-key-not-for-production \
             -e ENVIRONMENT=development \
             -e SKEY_CONTENTS="$SKEY_JSON" \
