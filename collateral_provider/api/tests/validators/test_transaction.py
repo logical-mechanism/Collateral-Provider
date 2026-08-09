@@ -225,3 +225,48 @@ class TestTransactionValidator(unittest.TestCase):
             check_valid_tx(no_redeemers, "preprod")
         self.assertIn("No Redeemers", str(context.exception.detail))
         mock_eval.assert_not_called()
+
+
+class ImplausibleEvaluationBudgetTestCase(unittest.TestCase):
+    """A zero execution budget is proof the evaluator evaluated nothing.
+
+    Starting the CEK machine charges its startup cost before a single term
+    runs, so every genuine budget is strictly positive. Accepting zero made
+    `committed >= evaluated` vacuously true for any transaction, which would
+    let a dishonest or broken evaluator wave through arbitrarily
+    under-budgeted redeemers — and those fail phase 2 on chain, which is the
+    branch that consumes the shared collateral.
+    """
+
+    def setUp(self):
+        self.models_patcher = patch(
+            "api.validators.transaction.get_protocol_cost_models",
+            return_value=COST_MODELS,
+        )
+        self.models_patcher.start()
+        self.addCleanup(self.models_patcher.stop)
+
+    @patch("api.validators.transaction.evaluate_transaction")
+    def test_zero_budget_is_rejected_as_upstream_failure(self, mock_eval):
+        for budget in (
+            {"memory": 0, "cpu": 0},
+            {"memory": 0, "cpu": 500000},
+            {"memory": 1000, "cpu": 0},
+        ):
+            with self.subTest(budget=budget):
+                mock_eval.return_value = _evaluation_response(
+                    [{"validator": "spend:0", "budget": budget}]
+                )
+                # Not a ValidationError: the caller's transaction is not the
+                # broken thing here, so this must not surface as a 400.
+                with self.assertRaises(UpstreamServiceUnavailable):
+                    check_valid_tx(TX_CBOR, "preprod")
+
+    @patch("api.validators.transaction.evaluate_transaction")
+    def test_smallest_positive_budget_is_still_accepted(self, mock_eval):
+        # The floor is "not zero", not a guess at a realistic minimum — a
+        # tighter bound risks rejecting a genuinely cheap script.
+        mock_eval.return_value = _evaluation_response(
+            [{"validator": "spend:0", "budget": {"memory": 1, "cpu": 1}}]
+        )
+        check_valid_tx(TX_CBOR, "preprod")

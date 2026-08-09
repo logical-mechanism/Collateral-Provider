@@ -107,6 +107,15 @@ HTTP contract:
   `-32601` over HTTP 200. Reporting that as 400 told every wallet its
   transaction was bad while the service was the broken party. An error we
   cannot classify also fails closed to 503.
+- **A zero execution budget from the evaluator is rejected (503).** Starting
+  the CEK machine charges its startup cost before a single term runs, so a
+  genuine budget is always strictly positive. Accepting zero made the
+  `committed >= evaluated` comparison vacuously true for every transaction,
+  so a dishonest or broken evaluator could wave through arbitrarily
+  under-budgeted redeemers — which fail phase 2 on chain, the branch that
+  consumes the shared collateral. This closes only the laziest forgery; an
+  evaluator returning a plausible underestimate is still undetectable from
+  here, and running an evaluator you trust remains the real defence.
 - **An unrecognized Plutus cost-model language is skipped rather than fatal.**
   A hard fork introducing `plutus:v5` previously made every request 503,
   including transactions using only languages already understood. The service

@@ -52,10 +52,23 @@ def _is_evaluation_result(value) -> bool:
         return False
     for field in ("memory", "cpu"):
         amount = budget.get(field)
+        # A real evaluation is never free: running a script starts the CEK
+        # machine, which charges its startup cost before executing a single
+        # term, so every genuine budget is strictly positive. A zero is
+        # therefore proof the evaluator did not evaluate anything — and it is
+        # the cheapest possible lie, because `committed >= 0` holds for every
+        # transaction, which would let an evaluator wave through arbitrarily
+        # under-budgeted redeemers. Those fail phase 2 on chain and consume
+        # the collateral.
+        #
+        # This only closes the laziest forgery; an evaluator returning 1 or a
+        # plausible-looking underestimate is not detectable from here. The
+        # real defence against a dishonest evaluator is running one you trust
+        # (see SECURITY.md), not this check.
         if (
             not isinstance(amount, int)
             or isinstance(amount, bool)
-            or amount < 0
+            or amount <= 0
             or amount > _UINT64_MAX
         ):
             return False
