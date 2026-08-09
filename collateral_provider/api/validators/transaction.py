@@ -41,12 +41,37 @@ class UpstreamServiceUnavailable(APIException):
     default_code = "upstream_unavailable"
 
 
+def _validator_pointer(validator) -> tuple[int, int] | None:
+    """Resolve the redeemer pointer from either shape Ogmios ships.
+
+    Ogmios names the validator a budget belongs to in two different ways
+    across its v6 line: the structured ``{"index": 0, "purpose": "mint"}``
+    that Koios's build returns, and the flat ``"mint:0"`` string used by
+    later releases. Accepting only the string turned every transaction that
+    genuinely passed evaluation into a 503, because the result was read as
+    malformed. Returns ``None`` when the pointer is neither shape.
+    """
+    if isinstance(validator, str):
+        match = _VALIDATOR_POINTER_RE.fullmatch(validator)
+        if match is None:
+            return None
+        return _PURPOSE_TAGS[match.group(1)], int(match.group(2))
+    if isinstance(validator, dict):
+        purpose = validator.get("purpose")
+        index = validator.get("index")
+        if not isinstance(purpose, str) or purpose not in _PURPOSE_TAGS:
+            return None
+        if not _uint(index):
+            return None
+        return _PURPOSE_TAGS[purpose], index
+    return None
+
+
 def _is_evaluation_result(value) -> bool:
     if not isinstance(value, dict):
         return False
-    validator = value.get("validator")
     budget = value.get("budget")
-    if not isinstance(validator, str) or not validator:
+    if _validator_pointer(value.get("validator")) is None:
         return False
     if not isinstance(budget, dict):
         return False
@@ -160,10 +185,9 @@ def _evaluated_redeemer_budgets(
     for evaluation in evaluations:
         if not _is_evaluation_result(evaluation):
             return None
-        match = _VALIDATOR_POINTER_RE.fullmatch(evaluation["validator"])
-        if match is None:
+        pointer = _validator_pointer(evaluation["validator"])
+        if pointer is None:
             return None
-        pointer = (_PURPOSE_TAGS[match.group(1)], int(match.group(2)))
         if pointer in budgets or not _uint(pointer[1]):
             return None
         budget = evaluation["budget"]
