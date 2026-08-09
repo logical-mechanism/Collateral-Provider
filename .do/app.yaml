@@ -1,19 +1,33 @@
-# DigitalOcean App Platform spec.
+# DigitalOcean App Platform spec — BOOTSTRAP TEMPLATE, NOT THE LIVE SPEC.
 #
-# Copy to the gitignored .do/app.local.yaml, fill secrets there, then apply:
-#   doctl apps create --spec .do/app.local.yaml          # first time
-#   doctl apps update <app-id> --spec .do/app.local.yaml # subsequent edits
+# ############################################################################
+# # NEVER apply this file to an existing app.                                #
+# #                                                                          #
+# #   doctl apps update <app-id> --spec .do/app.yaml     <-- DESTRUCTIVE     #
+# #                                                                          #
+# # The SECRET values below are REPLACE_WITH placeholders. Applying this over
+# # a running app overwrites the real DJANGO_SECRET_KEY and the signing key
+# # material with those strings, which takes the service down and destroys
+# # the only copy of the keys if they are not backed up elsewhere.
+# #                                                                          #
+# # To change a live app, pull its spec first, edit that, and apply it back:
+# #   doctl apps spec get <app-id> > /tmp/live.yaml
+# #   $EDITOR /tmp/live.yaml
+# #   doctl apps update <app-id> --spec /tmp/live.yaml
+# ############################################################################
 #
-# Optional DigitalOcean App Platform spec. The canonical production path is
-# the manually approved Ubuntu workflow documented in docs/UBUNTU_DEPLOY.md.
-# Automatic deploys are disabled here so one Git push cannot activate two
-# independent production mechanisms.
+# This file is for standing up a NEW app. Copy it to the gitignored
+# .do/app.local.yaml, fill the secrets there, then:
+#   doctl apps create --spec .do/app.local.yaml
 #
-# Operator setup checklist lives in docs/DEPLOY.md. The short version:
-# fill in the three SECRET env vars (DJANGO_SECRET_KEY, SKEY_CONTENTS,
-# VKEY_CONTENTS), point the GitHub repo, set ALLOWED_HOSTS to the
-# DO-issued hostname (and your custom domain if applicable), and
-# `doctl apps create`.
+# The values here are defaults for a fresh deployment and are deliberately
+# NOT kept in sync with any particular running app. Treat the live spec as the
+# only source of truth for what an app is actually configured to do.
+#
+# For this provider, App Platform IS the production deployment: it builds the
+# repo Dockerfile and deploys automatically on every push to main. See
+# docs/DEPLOY.md. docs/UBUNTU_DEPLOY.md documents a single-host alternative for
+# operators who would rather self-host than depend on a platform.
 
 name: collateral-provider
 
@@ -24,14 +38,23 @@ region: nyc
 
 services:
   - name: web
-    # Build the image from the repo's Dockerfile. Production code is promoted
-    # through the production branch, but App Platform deploys remain manual.
+    # Build the image from the repo's Dockerfile.
     dockerfile_path: Dockerfile
 
+    # Auto-deploy on push. This means MERGING TO main SHIPS TO PRODUCTION —
+    # there is no promotion step and no manual gate. DigitalOcean builds from
+    # the repo independently of GitHub Actions, so a red CI run does not stop
+    # a deploy; protect main with required checks if that matters to you.
+    #
+    # Set deploy_on_push: false and point `branch` at a release branch if you
+    # want merges to main to be safe. Whichever you choose, make sure
+    # README.md and CLAUDE.md say the same thing — this file disagreeing with
+    # reality is what previously sent a whole round of work at the wrong
+    # deployment.
     github:
       repo: logical-mechanism/Collateral-Provider
-      branch: production
-      deploy_on_push: false
+      branch: main
+      deploy_on_push: true
 
     # Smallest paid tier. The service is light (one upstream, ed25519
     # signatures, 16 KiB max payload), so basic-xxs is enough — bump
@@ -102,10 +125,17 @@ services:
       - key: ENVIRONMENT
         value: production
       - key: ALLOWED_HOSTS
-        # Bootstrap with Django's leading-dot subdomain form so the first DO
-        # health check can use the not-yet-known issued hostname. Immediately
-        # after creation, replace it in app.local.yaml with that exact hostname
-        # plus any custom domain, then update the app.
+        # Django's leading-dot form matches any subdomain, so this covers the
+        # DO-issued hostname before you know what it is. Add your custom domain
+        # once you have one; there is no need to ever list the issued hostname
+        # explicitly.
+        #
+        # NEVER put a bare "*" in this list, not even temporarily. One "*"
+        # makes Django accept any Host header and silently voids every other
+        # entry, which also makes the DisallowedHost handler unreachable and
+        # lets a caller control the `servers` block that drf-spectacular
+        # renders into /api/schema/. A wildcard added during bootstrap is very
+        # easy to leave behind — this deployment did exactly that.
         value: .ondigitalocean.app,your-custom-domain.example
       - key: TRUSTED_PROXY_IPS
         # DO App Platform's HTTP router connects to the container from

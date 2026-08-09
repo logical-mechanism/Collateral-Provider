@@ -1,3 +1,12 @@
+# Self-hosted single-host deployment, for operators running their own instance
+# on Ubuntu/systemd — see docs/UBUNTU_DEPLOY.md.
+#
+# This is NOT how the reference provider (www.giveme.my) deploys. That runs on
+# DigitalOcean App Platform, which builds the Dockerfile and auto-deploys on
+# every push to main; nothing in this file participates in that. The workflow
+# is workflow_dispatch-only, so it never fires on its own, and it does nothing
+# at all unless a `production` environment is configured with DEPLOY_HOST,
+# DEPLOY_PORT, DEPLOY_USER, PUBLIC_HEALTH_URL and the two SSH secrets.
 name: Deploy production
 
 on:

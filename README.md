@@ -216,11 +216,19 @@ so a caller-prefixed leftmost value cannot override the proxy-appended client
 address. The proxy should still replace or correctly append the header and
 prevent direct public access to gunicorn.
 
-The canonical single-host production setup and manually triggered GitHub
-deployment workflow are documented in
-[`docs/UBUNTU_DEPLOY.md`](docs/UBUNTU_DEPLOY.md). The DigitalOcean App
-Platform container path remains available as an optional alternative in
-[`docs/DEPLOY.md`](docs/DEPLOY.md).
+This provider runs on DigitalOcean App Platform, which builds the
+[`Dockerfile`](Dockerfile) and **deploys automatically on every push to
+`main`** — see [`docs/DEPLOY.md`](docs/DEPLOY.md). Note that DigitalOcean
+builds independently of GitHub Actions, so CI does not gate a release; branch
+protection on `main` is what makes it meaningful.
+
+If you would rather self-host than depend on a platform,
+[`docs/UBUNTU_DEPLOY.md`](docs/UBUNTU_DEPLOY.md) documents a hardened
+single-host setup: an unprivileged runtime user, a sandboxed systemd unit, an
+nginx/TLS front end, and a restricted SSH forced command driven by
+[`.github/workflows/deploy-production.yml`](.github/workflows/deploy-production.yml)
+that builds an immutable release and rolls back on a failed readiness probe.
+That path is maintained for other operators; it is not what runs here.
 
 ## Configuration
 

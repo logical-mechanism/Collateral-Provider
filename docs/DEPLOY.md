@@ -1,14 +1,38 @@
-# Optional: deploying to DigitalOcean App Platform
+# Deploying to DigitalOcean App Platform
 
-The canonical production path is the manually triggered Ubuntu + systemd
-deployment in [UBUNTU_DEPLOY.md](UBUNTU_DEPLOY.md). This document describes an
-optional DigitalOcean App Platform alternative. Its checked-in spec tracks the
-`production` branch with `deploy_on_push: false`; deployments are manual and
-are not part of the Ubuntu release workflow.
+**This is how the reference provider (www.giveme.my) runs.** App Platform
+builds the repo's [`Dockerfile`](../Dockerfile) and deploys automatically on
+every push to the tracked branch.
 
-This is the one-time setup for the App Platform alternative. After promoting a
-reviewed commit to `production`, explicitly create an App Platform deployment;
-a Git push alone does not roll it out.
+> **Merging to the tracked branch ships to production.** The live app is
+> configured with `branch: main` and `deploy_on_push: true`, so a merged pull
+> request is a release — there is no promotion step and no approval gate.
+> DigitalOcean also builds from GitHub independently of GitHub Actions, so a
+> red CI run does not stop a deploy; required status checks on the branch are
+> what make CI meaningful.
+>
+> Blast radius is bounded: App Platform keeps the current deployment serving
+> until the new one passes its `/healthz` check, so a container that fails to
+> boot leaves production up rather than taking it down.
+
+If you would rather deploy on hardware you control, with manual approval and
+an explicit rollback path, see [UBUNTU_DEPLOY.md](UBUNTU_DEPLOY.md).
+
+**The checked-in [`.do/app.yaml`](../.do/app.yaml) is a bootstrap template,
+not a mirror of the live app.** Its secrets are `REPLACE_WITH` placeholders,
+so applying it over a running app overwrites the real `DJANGO_SECRET_KEY` and
+signing keys. To change a live app, pull its spec, edit that, and apply it
+back:
+
+```bash
+doctl apps spec get <app-id> > /tmp/live.yaml
+$EDITOR /tmp/live.yaml
+doctl apps update <app-id> --spec /tmp/live.yaml
+```
+
+The live spec is also the only reliable answer to "what branch does this
+deploy from?" — read it there, or in the DO console under
+App → Settings → App Spec, rather than trusting this repository.
 
 For local development setup, see [README.md](../README.md). This file
 is operator-facing.
@@ -164,14 +188,17 @@ Two paths, depending on whether you opted into the persistent volume in
 `.do/app.local.yaml`:
 
 - **Default (no volume).** `known.hosts.json` lives inside the image. Edit it
-  in the repo, commit, promote the reviewed commit to `production`, then
-  trigger a deployment explicitly. Note that `bans.json` is **not** shipped in
-  the image — it is gitignored and excluded by `.dockerignore`, so without a
-  volume (or a `BANS_PATH` pointing somewhere writable) the ban list is
-  permanently empty:
+  in the repo and merge to the deployed branch — with `deploy_on_push: true`
+  that rolls out on its own, so a registry edit is a production release like
+  any other. If autodeploy is off, trigger one explicitly:
   ```bash
   doctl apps create-deployment <app-id>
   ```
+  Note that `bans.json` is **not** shipped in the image — it is gitignored and
+  excluded by `.dockerignore`, so without a volume (or a `BANS_PATH` pointing
+  somewhere writable) the ban list is permanently empty. This also means the
+  documented hot-reload property does not hold in the default configuration:
+  both files are baked in, so picking up a change requires a redeploy.
 
 - **With volume.** Files live on the mounted `/data/` volume.
   ```bash

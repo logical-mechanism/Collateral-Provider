@@ -106,10 +106,12 @@ If you're running this service:
       for, another payment address, stake credential, native policy, or
       governance credential. The returned witness authorizes the whole body.
 - [ ] Treat the full advertised UTxO as operationally at risk unless callers
-      use CIP-40 collateral return to an address controlled by the provider
-      key. The API intentionally does not require `collateral_return` /
-      `total_collateral` so wallet builders can integrate without
-      provider-specific balancing rules.
+      use CIP-40 collateral return. The API does not *require*
+      `collateral_return` / `total_collateral`, so wallet builders can
+      integrate without provider-specific balancing rules — but when a caller
+      does supply `collateral_return` it is validated to pay this provider's
+      own payment key hash, so an attacker cannot redirect the remainder to
+      themselves and profit from burning the UTxO.
 - [ ] Do not add a pass-through for Ogmios `additionalUtxo`. The service
       rejects every non-empty caller-supplied UTxO set because a reference to
       an unsubmitted parent cannot authenticate the output value/datum/script
@@ -141,12 +143,13 @@ If you're running this service:
       Under systemd or a container runtime, configure journal/runtime retention
       and access controls. In file mode, restrict `LOG_FILE` to the service user.
 
-### Ubuntu/systemd deploys
+### Self-hosted Ubuntu/systemd deploys
 
-The canonical single-host deployment is documented in
-[docs/UBUNTU_DEPLOY.md](docs/UBUNTU_DEPLOY.md). Keep the deployment identity
-separate from the runtime identity: the deploy account may write versioned
-code releases and may reset failure state, restart, or stop only
+The single-host self-hosting path is documented in
+[docs/UBUNTU_DEPLOY.md](docs/UBUNTU_DEPLOY.md). It is not what the reference
+provider runs, but if you choose it: keep the deployment identity separate
+from the runtime identity. The deploy account may write versioned code
+releases and may reset failure state, restart, or stop only
 `collateral-provider.service`, while only the runtime account can read the
 application environment and signing keys. The stop is used only when a failed
 first deploy has no prior version to restore. Pin the server host key in
@@ -156,9 +159,15 @@ Protect the GitHub `production` environment with required review and a
 
 ### Container-platform deploys (DigitalOcean App Platform, Fly, Render, ...)
 
-If you're using the [DigitalOcean App Platform deploy](docs/DEPLOY.md)
-(or another platform that runs the bundled `Dockerfile`), additional
-hardening:
+This is how the reference provider runs. If you deploy the bundled
+`Dockerfile` on a platform, additional hardening:
+
+- [ ] Know whether your platform auto-deploys. The reference deployment has
+      `deploy_on_push: true` on `main`, so **merging a pull request ships to
+      production**, and the platform builds from GitHub independently of
+      GitHub Actions — a red CI run does not stop a release. Protect the
+      deployed branch with required status checks, or set
+      `deploy_on_push: false` and deploy explicitly.
 
 - [ ] Signing keys must enter the runtime via `SKEY_CONTENTS` /
       `VKEY_CONTENTS` SECRET env vars (or a mounted volume). They must
@@ -177,9 +186,20 @@ hardening:
       throttle — easy to miss, very bad. The bundled `.do/app.yaml`
       sets the standard RFC1918 ranges, which is correct for App
       Platform.
-- [ ] `ALLOWED_HOSTS` must include the platform-issued hostname plus
-      your custom domain. An overly permissive value (e.g. `*`) opens
-      Host-header injection.
+- [ ] `ALLOWED_HOSTS` must list your real hostnames and **must not contain a
+      bare `*`**. Check this specifically rather than assuming — a wildcard
+      added while bootstrapping (before the platform-issued hostname is known)
+      is easy to leave behind, and one `*` silently voids every other entry in
+      the list. Django then accepts any Host header, the `DisallowedHost`
+      handler becomes unreachable, and a caller controls the `servers` block
+      drf-spectacular renders into `/api/schema/`.
+
+      Django's leading-dot form covers the issued hostname without a wildcard,
+      so `www.example.com,example.com,.ondigitalocean.app` is the shape you
+      want. Removing a wildcard is safe to try on App Platform: the platform
+      keeps the current deployment serving until the new one passes its health
+      check, so if the probe's Host header turns out not to match, the change
+      simply fails to roll out rather than taking the service down.
 - [ ] Verify `/metrics` is either off (default) or restricted to a
       specific scraper IP via `METRICS_ALLOW_IPS`. The endpoint exposes
       aggregate request counts and Koios outcomes — not per-user data,

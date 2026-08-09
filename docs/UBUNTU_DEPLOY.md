@@ -1,10 +1,21 @@
-# Ubuntu production deployment
+# Self-hosting on Ubuntu
 
-This is the canonical production layout for a single Ubuntu 24.04 host. A
-manually dispatched GitHub Actions job streams the exact `production` commit
-as a tar archive over SSH. The server builds an immutable release, switches a
-symlink, restarts gunicorn through systemd, and rolls back automatically if the
-local readiness probe fails.
+**This is not how www.giveme.my is deployed.** That instance runs on
+DigitalOcean App Platform ([docs/DEPLOY.md](DEPLOY.md)). This document is for
+operators who want to run their own collateral provider on hardware they
+control, without depending on a platform.
+
+Everything below is self-contained: the layout, the accounts, the systemd
+unit, the nginx front end, and the release mechanism are yours to own. Nothing
+here needs to match the reference deployment, and the checked-in hostname
+`www.giveme.my` is a placeholder you should replace throughout.
+
+The design is a single Ubuntu 24.04 host. A manually dispatched GitHub Actions
+job streams an exact commit as a tar archive over SSH to a restricted forced
+command. The server builds an immutable release, switches a symlink, restarts
+gunicorn through systemd, and rolls back automatically if the local readiness
+probe fails. Deploys are deliberately manual and approval-gated — the opposite
+trade-off from the reference deployment's push-to-`main` autodeploy.
 
 The deploy channel carries source code only. `DJANGO_SECRET_KEY`, collateral
 configuration, and `payment.skey` / `payment.vkey` are created on the server

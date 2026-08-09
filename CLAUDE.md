@@ -176,13 +176,34 @@ identity/network values still fail loudly when absent.
 - **Custom DRF exception handler** [util.normalize_error_response](collateral_provider/api/util.py) flattens DRF's `{field: [messages]}` to `{"detail": "..."}`. For `non_field_errors` and our own validators the message passes through unchanged; for a field-keyed error it folds the field name in (`"tx: ..."`), with special-cased wording for DRF's required/null/blank defaults. Returning `Response(serializer.errors, ...)` from a view bypasses it — use `is_valid(raise_exception=True)` so the handler kicks in. Paths outside DRF have their own handlers: `handler404` (JSON 404 for API callers, redirect for browsers), `handler500`, and `handler400` for `DisallowedHost` — all three emit the same envelope.
 - **/healthz is unthrottled** by `@throttle_classes([])`. New endpoints inherit no global throttle (we deliberately removed `DEFAULT_THROTTLE_CLASSES`), so they must opt in with `throttle_classes` — easier to forget than to mis-set.
 
-## Branch state
+## Deployment (verify before trusting this section)
 
-`production` is the deployed branch and may lag `main`. Don't assume they
-match. The remote `main` is the integration branch — PR there, promote a
-reviewed commit to `production`, then manually run the production deployment
-workflow with that branch selected. Ubuntu/systemd is the canonical deploy;
-the DigitalOcean App Platform spec is an optional, non-auto-deploying path.
+**`main` is the deployed branch. Merging a PR to `main` ships to production
+immediately.** DigitalOcean App Platform builds the repo `Dockerfile` and
+auto-deploys on every push (`deploy_on_push: true`). There is no promotion
+step and no manual approval gate.
+
+DigitalOcean builds from GitHub independently of GitHub Actions, so **CI does
+not gate a deploy** — a red `main` still ships. Branch protection on `main` is
+what makes CI meaningful; the workflow run itself does not block anything.
+
+Blast radius is bounded: App Platform keeps the current deployment serving
+until the new one passes its `/healthz` check, so a container that fails to
+boot leaves production up rather than taking it down.
+
+The `production` branch and everything under `deploy/` —
+`collateral-provider-deploy`, the systemd unit, the nginx template, the
+sudoers rule — plus `.github/workflows/deploy-production.yml` and
+`docs/UBUNTU_DEPLOY.md` describe a **single-host self-hosting path that this
+provider does not use**. They are maintained for operators who want to run
+their own instance. Do not treat them as this deployment.
+
+`.do/app.yaml` in this repo is a bootstrap template with placeholder secrets,
+**not** a mirror of the live app, and applying it over a running app destroys
+the real secrets. Read the live spec instead — `doctl apps spec get <app-id>`,
+or the DO console under App → Settings → App Spec. This file claiming
+otherwise is what previously sent a full round of work at infrastructure that
+did not exist, so check the live spec before doing any deployment work.
 
 ## Style this repo prefers
 
