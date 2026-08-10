@@ -1,6 +1,7 @@
-# Weekly Dependabot scans for both pinned Python deps and the GitHub
-# Actions used in CI. Security updates get grouped into one PR per
-# ecosystem so a flurry of CVEs doesn't fragment review.
+# Weekly Dependabot scans for the pinned Python deps, the Rust crates behind
+# the port in rs/, and the GitHub Actions used in CI. Security updates get
+# grouped into one PR per ecosystem so a flurry of CVEs doesn't fragment
+# review.
 
 version: 2
 
@@ -16,6 +17,24 @@ updates:
         patterns:
           - "*"
       runtime-versions:
+        applies-to: version-updates
+        patterns:
+          - "*"
+
+  # The Rust port. Its Cargo.lock is committed and CI builds --locked, so a
+  # dependency cannot float underneath the signing path without a reviewable
+  # lockfile change.
+  - package-ecosystem: "cargo"
+    directory: "/rs"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      cargo-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      cargo-versions:
         applies-to: version-updates
         patterns:
           - "*"

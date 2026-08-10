@@ -61,6 +61,15 @@ jobs:
       - name: Test
         run: cargo test --all-targets --locked
 
+      # The Python side runs pip-audit on every CI run; this is the analogue.
+      # A signing service should not learn about a dependency advisory from a
+      # weekly Dependabot PR alone.
+      - name: Audit dependencies
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: rs
+
       - name: Release build
         run: cargo build --release --locked
 

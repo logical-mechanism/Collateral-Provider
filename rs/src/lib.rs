@@ -32,6 +32,10 @@ pub mod throttle;
 pub mod tx_fields;
 pub mod validators;
 
-/// Single source of truth for the service version, mirroring
-/// `api.__version__`. `/healthz` and `/livez` report it.
-pub const VERSION: &str = "1.3.0";
+/// The service version `/healthz` and `/livez` report.
+///
+/// Read from `Cargo.toml` rather than written out again, so this crate has one
+/// place to bump. It must stay in step with `api.__version__` on the Python
+/// side — the two implementations serve the same contract and a client reading
+/// `/healthz` should not be able to tell them apart.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

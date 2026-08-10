@@ -148,6 +148,42 @@ applies unchanged — in particular, the signing key must control *only* the
 advertised collateral UTxO, and the collateral UTxO must be rotated before
 every hard fork.
 
+## Self-hosting with systemd
+
+[deploy/collateral-provider-rs.service](deploy/collateral-provider-rs.service)
+is the whole thing. Compared with the Python unit in `../deploy/` there is no
+virtualenv, no gunicorn worker/thread tuning, and no writable cache directory
+to provision — the throttle window lives in process memory.
+
+```sh
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin collateral-provider
+sudo install -m 0755 target/release/collateral-provider /usr/local/bin/
+sudo install -d -m 0750 -o root -g collateral-provider /etc/collateral-provider
+sudo install -m 0640 -o root -g collateral-provider \
+    sample.env /etc/collateral-provider/environment   # then edit it
+sudo install -m 0644 deploy/collateral-provider-rs.service \
+    /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now collateral-provider-rs
+```
+
+Put the signing keys somewhere the unit can read and the world cannot —
+`/etc/collateral-provider/keys/` owned `root:collateral-provider`, mode `0640`,
+with `SKEY_PATH` / `VKEY_PATH` pointing at them. The unit runs with
+`ProtectSystem=strict` and no write access anywhere, so a key path inside a
+writable directory is a smell, not a convenience.
+
+**TLS is still the proxy's job.** The service binds loopback and speaks plain
+HTTP; nginx or Caddy in front terminates TLS, sets HSTS, and redirects
+HTTP→HTTPS. Set `TRUSTED_PROXY_IPS` to that proxy's address or the throttle
+and ban list will key on the proxy instead of the caller. The nginx template
+in `../deploy/` works unchanged apart from the upstream port — but drop its
+static-file location blocks, since this binary serves no static assets.
+
+Check it came up with `systemctl status collateral-provider-rs` and
+`curl -s localhost:8000/healthz`, which revalidates the signing identity
+cryptographically rather than just reporting that the process is alive.
+
 ## Container
 
 ```sh
