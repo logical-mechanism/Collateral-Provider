@@ -154,6 +154,54 @@ impl PartialEq for Value {
 
 impl Eq for Value {}
 
+/// Consistent with the hand-written [`PartialEq`] above, so a [`Value`] can key
+/// a `HashSet`. Two callers de-duplicate decoded values — `validators::cbor`
+/// normalizing a Conway `set<T>` and `script_integrity` rejecting duplicate
+/// transaction map keys — and both would otherwise be quadratic in an
+/// attacker-chosen entry count.
+///
+/// Recursion is bounded by the decoder's `MAX_DEPTH`, so this cannot blow the
+/// stack on a crafted payload.
+impl std::hash::Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Value::Int(int) => int.hash(state),
+            Value::BigInt {
+                negative,
+                magnitude,
+            } => {
+                negative.hash(state);
+                magnitude.hash(state);
+            }
+            Value::Bytes(bytes) => bytes.hash(state),
+            Value::Text(text) => text.hash(state),
+            Value::Array(items) => {
+                items.len().hash(state);
+                for item in items {
+                    item.hash(state);
+                }
+            }
+            Value::Map(entries) => {
+                entries.len().hash(state);
+                for (key, entry) in entries {
+                    key.hash(state);
+                    entry.hash(state);
+                }
+            }
+            Value::Tag(tag, inner) => {
+                tag.hash(state);
+                inner.hash(state);
+            }
+            Value::Bool(flag) => flag.hash(state),
+            Value::Null | Value::Undefined => {}
+            Value::Simple(simple) => simple.hash(state),
+            // Matches the bit-pattern equality `PartialEq` uses above.
+            Value::Float(float) => float.to_bits().hash(state),
+        }
+    }
+}
+
 impl Value {
     /// The integer value, if this is [`Value::Int`]. Booleans are never
     /// integers here, matching the Python guards that reject `bool`.
@@ -771,6 +819,49 @@ pub fn decode_exact(data: &[u8]) -> Result<Value, CborError> {
         return Err(CborError::Malformed("trailing CBOR data"));
     }
     Ok(value)
+}
+
+// --- Hex ------------------------------------------------------------------
+
+/// `bytes.fromhex` semantics: both digit cases are accepted and ASCII
+/// whitespace is skipped, but only *between* complete byte pairs — Python
+/// rejects `"a cab"` while accepting `"ac ab"`. Returns `None` on anything
+/// `bytes.fromhex` would raise `ValueError` for.
+///
+/// Every hex-to-CBOR conversion in this crate goes through here rather than
+/// `hex::decode`, which rejects the whitespace Python accepts. A request the
+/// Django service signs must not be refused by this one over the same bytes,
+/// and the only way to keep that true is to have a single decoder.
+pub fn decode_hex(text: &str) -> Option<Vec<u8>> {
+    let raw = text.as_bytes();
+    let mut out = Vec::with_capacity(raw.len() / 2);
+    let mut index = 0;
+    while index < raw.len() {
+        if is_ascii_space(raw[index]) {
+            index += 1;
+            continue;
+        }
+        let high = hex_digit(raw[index])?;
+        let low = raw.get(index + 1).copied().and_then(hex_digit)?;
+        out.push((high << 4) | low);
+        index += 2;
+    }
+    Some(out)
+}
+
+/// CPython's `Py_ISSPACE`, which includes the vertical tab that Rust's
+/// `is_ascii_whitespace` leaves out.
+fn is_ascii_space(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 // --- Encoding -------------------------------------------------------------

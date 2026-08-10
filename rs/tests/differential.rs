@@ -258,3 +258,102 @@ fn corpus_rejections_are_all_semantic() {
         cases.len()
     );
 }
+
+/// Every hex entry point has to accept exactly the strings `check_cbor_hex`
+/// accepts, or the service refuses a request the Django one signs.
+///
+/// The pipeline validates `check_cbor_hex`'s decoded bytes but then hands the
+/// *original string* to three more consumers — the redeemer-budget reader, the
+/// script-data cursor, and the signer. Each used to re-decode it with
+/// `hex::decode`, which rejects the ASCII whitespace `bytes.fromhex` skips, so
+/// a pretty-printed transaction passed validation and then died with
+/// "Invalid CBOR Data In Tx". Running the whole chain corpus through a
+/// whitespace-injected form pins every one of them to the same decoder.
+#[test]
+fn every_hex_entry_point_accepts_what_bytes_fromhex_accepts() {
+    use collateral_provider::validators::cbor::check_cbor_hex;
+    use collateral_provider::validators::transaction::committed_redeemer_budgets;
+
+    /// A space after every byte, plus leading and trailing whitespace —
+    /// `bytes.fromhex` accepts all of it, `hex::decode` accepts none of it.
+    fn spaced(hex: &str) -> String {
+        let mut out = String::from("\n ");
+        for pair in hex.as_bytes().chunks(2) {
+            out.push_str(std::str::from_utf8(pair).expect("ascii hex"));
+            out.push(' ');
+        }
+        out.push('\t');
+        out
+    }
+
+    // The cap only has to admit the corpus; the point here is the decoder.
+    const CAP: usize = 1 << 20;
+    let mut budget_cases = 0usize;
+    let mut script_data_cases = 0usize;
+
+    for case in &chain_corpus() {
+        let label = &case.tx_hash;
+        let padded = spaced(&case.cbor);
+
+        // 1. The gate the pipeline actually runs first.
+        let bytes = check_cbor_hex(&padded, CAP).unwrap_or_else(|err| {
+            panic!(
+                "{label}: check_cbor_hex rejected padded hex: {}",
+                err.detail()
+            )
+        });
+        assert_eq!(
+            hex::encode(&bytes),
+            case.cbor.to_lowercase(),
+            "{label}: padded hex decoded to different bytes"
+        );
+
+        // 2. The signer, whose answer is the transaction id the chain assigned.
+        assert_eq!(
+            signature::tx_id(&padded).unwrap_or_else(|err| panic!("{label}: {err}")),
+            case.tx_hash,
+            "{label}: padded hex produced a different transaction id"
+        );
+
+        // 3. and 4. The two consumers inside `check_valid_tx`. Both legitimately
+        // reject some corpus entries on semantic grounds; what may never differ
+        // is their verdict between the padded and clean forms.
+        let clean_budgets = committed_redeemer_budgets(&case.cbor);
+        let padded_budgets = committed_redeemer_budgets(&padded);
+        match (&clean_budgets, &padded_budgets) {
+            (Ok(clean), Ok(padded)) => {
+                assert_eq!(clean, padded, "{label}: budgets differ");
+                budget_cases += 1;
+            }
+            (Err(clean), Err(padded)) => {
+                assert_eq!(
+                    clean.detail(),
+                    padded.detail(),
+                    "{label}: budget errors differ"
+                )
+            }
+            _ => panic!("{label}: whitespace flipped the redeemer-budget verdict"),
+        }
+
+        let clean_parts = script_integrity::script_data_parts(&case.cbor);
+        let padded_parts = script_integrity::script_data_parts(&padded);
+        match (&clean_parts, &padded_parts) {
+            (Ok(clean), Ok(padded)) => {
+                assert_eq!(clean, padded, "{label}: script data parts differ");
+                script_data_cases += 1;
+            }
+            (Err(clean), Err(padded)) => assert_eq!(
+                clean.to_string(),
+                padded.to_string(),
+                "{label}: script data errors differ"
+            ),
+            _ => panic!("{label}: whitespace flipped the script-data verdict"),
+        }
+    }
+
+    // A corpus that rejected everything would make the assertions vacuous.
+    assert!(
+        budget_cases >= 50 && script_data_cases >= 50,
+        "only {budget_cases} budget and {script_data_cases} script-data successes"
+    );
+}

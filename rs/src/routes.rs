@@ -24,7 +24,7 @@ use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{from_fn, from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::Router;
 use futures_util::FutureExt;
 use serde_json::{json, Value as JsonValue};
@@ -62,8 +62,11 @@ pub fn app(state: AppState) -> Router {
         .route("/livez/", get(livez))
         .route("/known_hosts", get(known_hosts))
         .route("/known_hosts/", get(known_hosts))
-        .route("/metrics", get(metrics))
-        .route("/metrics/", get(metrics))
+        // `any`, not `get`: Django's `metrics_view` carries no `@require_GET`,
+        // so every method 404s while metrics are off. Routing GET alone would
+        // answer 405 for the others and tell a scanner the endpoint exists.
+        .route("/metrics", any(metrics))
+        .route("/metrics/", any(metrics))
         .route("/api/schema", get(schema))
         .route("/api/schema/", get(schema))
         .method_not_allowed_fallback(method_not_allowed)
@@ -97,6 +100,19 @@ async fn collateral(
     environment: Result<Path<String>, PathRejection>,
     request: Request,
 ) -> Response {
+    // Throttle first, exactly as DRF's `initial()` does before the view body
+    // runs. Rejecting an unknown environment first looks cheaper, but it would
+    // leave `POST /<anything>/collateral/` unmetered — and `body_limit` has
+    // already buffered up to the cap by the time we get here, so no request
+    // reaching this handler is free to serve.
+    let ip_address = client_ip_of(&request, &state);
+    let ident = ip_address
+        .clone()
+        .unwrap_or_else(|| UNIDENTIFIED.to_string());
+    if let ThrottleDecision::Throttled { retry_after } = state.throttle.allow(&ident) {
+        return throttled_response(retry_after);
+    }
+
     // A path segment that will not percent-decode names no configured
     // network, so it gets the same answer as any other unknown one.
     let Ok(Path(environment)) = environment else {
@@ -107,20 +123,10 @@ async fn collateral(
     // forge a second log line.
     tracing::debug!(target: "api", "Collateral request received: env={:?}", environment);
 
-    // Reject an unknown environment before touching the throttle, the body,
-    // or anything else: it is the cheapest possible rejection.
     let Some(env_config) = state.config.environment(&environment).cloned() else {
         tracing::warn!(target: "api", "Invalid collateral environment: env={:?}", environment);
         return detail_response(StatusCode::BAD_REQUEST, "Invalid Environment");
     };
-
-    let ip_address = client_ip_of(&request, &state);
-    let ident = ip_address
-        .clone()
-        .unwrap_or_else(|| UNIDENTIFIED.to_string());
-    if let ThrottleDecision::Throttled { retry_after } = state.throttle.allow(&ident) {
-        return throttled_response(retry_after);
-    }
 
     if !is_json_content_type(request.headers()) {
         return detail_response(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Unsupported Media Type");
@@ -722,6 +728,34 @@ mod tests {
         assert_eq!(body_json(response).await, json!({"detail": "Not Found"}));
     }
 
+    /// Django's `metrics_view` carries no `@require_GET`, so with metrics off
+    /// every method answers 404. Routing GET alone would answer 405 for the
+    /// others, which is exactly the hint the endpoint is meant not to give.
+    #[tokio::test]
+    async fn metrics_is_indistinguishable_from_an_unrouted_path_for_every_method() {
+        for method in ["POST", "PUT", "PATCH", "DELETE", "HEAD"] {
+            let request = Request::builder()
+                .method(method)
+                .uri("/metrics")
+                .header(header::HOST, "127.0.0.1")
+                .header(header::CONTENT_LENGTH, "0")
+                .body(Body::empty())
+                .expect("request builds");
+            let response = send(router(), request).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method}");
+            // An unrouted path answers the same way, byte for byte.
+            let unrouted = Request::builder()
+                .method(method)
+                .uri("/definitely-not-a-route")
+                .header(header::HOST, "127.0.0.1")
+                .header(header::CONTENT_LENGTH, "0")
+                .body(Body::empty())
+                .expect("request builds");
+            let other = send(router(), unrouted).await;
+            assert_eq!(other.status(), StatusCode::NOT_FOUND, "{method}");
+        }
+    }
+
     #[tokio::test]
     async fn metrics_rejects_an_unknown_client() {
         let mut config = test_config();
@@ -899,6 +933,46 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert!(response.headers().contains_key(header::RETRY_AFTER));
+    }
+
+    /// DRF throttles in `initial()`, before the view body reaches its
+    /// environment check, so `POST /<anything>/collateral/` is metered too.
+    /// It has to be: `body_limit` buffers up to the cap for any path matching
+    /// the collateral route, so an unknown environment is not a free request,
+    /// and a made-up path segment is the most trivially generated flood there
+    /// is.
+    #[tokio::test]
+    async fn an_unknown_environment_still_spends_throttle_budget() {
+        let mut config = test_config();
+        config.throttle_rate = "1/min".parse().expect("valid rate");
+        let router = router_with(config);
+
+        let first = send(
+            router.clone(),
+            post_json("/fakenet/collateral/", r#"{"tx":"de"}"#),
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(first).await,
+            json!({"detail": "Invalid Environment"})
+        );
+
+        // The budget is one per minute and the first request spent it, whether
+        // or not the environment existed.
+        let second = send(
+            router.clone(),
+            post_json("/fakenet/collateral/", r#"{"tx":"de"}"#),
+        )
+        .await;
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        // The same bucket, so a real environment is throttled by it too.
+        let third = send(
+            router.clone(),
+            post_json("/preprod/collateral/", r#"{"tx":"de"}"#),
+        )
+        .await;
+        assert_eq!(third.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]

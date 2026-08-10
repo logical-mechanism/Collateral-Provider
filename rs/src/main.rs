@@ -11,11 +11,9 @@ use collateral_provider::{config::Config, logging, routes, state::AppState, VERS
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    // Container platforms inject variables directly and have no .env file;
-    // a missing one is not an error, and dotenvy never overrides a variable
-    // that is already set.
-    let _ = dotenvy::dotenv();
-
+    // `Config::from_env` loads `.env` itself, so there is one documented place
+    // where that happens and startup does not walk and parse the file twice.
+    //
     // Configuration has to be readable before logging can be configured, so
     // a configuration failure has nowhere to go but stderr.
     let config = match Config::from_env() {

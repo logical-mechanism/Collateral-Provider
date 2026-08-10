@@ -1,10 +1,9 @@
 //! Structural checks over the submitted transaction body.
 
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
 
 use crate::ban_list::BanList;
-use crate::cbor::Value;
+use crate::cbor::{decode_hex, Value};
 use crate::config::EnvironmentConfig;
 use crate::error::{ApiError, ApiResult};
 use crate::tx_fields::{
@@ -39,10 +38,10 @@ pub fn set_items(value: &Value) -> Option<Vec<&Value>> {
     // quadratic in an attacker-chosen entry count — a 16 KiB body holds
     // thousands of one-byte entries — so hash the structure and keep the
     // original's complexity.
-    let mut seen: HashSet<Structural<'_>> = HashSet::with_capacity(entries.len());
+    let mut seen: HashSet<&Value> = HashSet::with_capacity(entries.len());
     let mut normalized = Vec::with_capacity(entries.len());
     for entry in entries {
-        if seen.insert(Structural(entry)) {
+        if seen.insert(entry) {
             normalized.push(entry);
         }
     }
@@ -250,42 +249,6 @@ pub fn check_signers(body: &Value, pkh: &str) -> ApiResult<()> {
 
 // --- internals -------------------------------------------------------------
 
-/// `bytes.fromhex` semantics: both digit cases are accepted and ASCII
-/// whitespace is skipped, but only *between* complete byte pairs — Python
-/// rejects `"a cab"` while accepting `"ac ab"`. Returns `None` on anything
-/// `bytes.fromhex` would raise `ValueError` for.
-fn decode_hex(text: &str) -> Option<Vec<u8>> {
-    let raw = text.as_bytes();
-    let mut out = Vec::with_capacity(raw.len() / 2);
-    let mut index = 0;
-    while index < raw.len() {
-        if is_ascii_space(raw[index]) {
-            index += 1;
-            continue;
-        }
-        let high = hex_digit(raw[index])?;
-        let low = raw.get(index + 1).copied().and_then(hex_digit)?;
-        out.push((high << 4) | low);
-        index += 2;
-    }
-    Some(out)
-}
-
-/// CPython's `Py_ISSPACE`, which includes the vertical tab that Rust's
-/// `is_ascii_whitespace` leaves out.
-fn is_ascii_space(byte: u8) -> bool {
-    matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')
-}
-
-fn hex_digit(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
-
 /// Validate a `[txid, index]` reference and return its parts.
 ///
 /// After `set_items` an entry is an array, so Python's tuple check maps onto
@@ -327,64 +290,6 @@ fn check_utxo_shape(utxo: &Value) -> ApiResult<(&[u8], Option<u64>)> {
 
 fn is_collateral(txid: &[u8], index: Option<u64>, env_config: &EnvironmentConfig) -> bool {
     index == Some(env_config.txidx) && hex::encode(txid) == env_config.txid
-}
-
-/// Hash-set key giving [`Value`] the structural hashing its `PartialEq`
-/// already implies, so `set_items` can de-duplicate in linear time.
-struct Structural<'a>(&'a Value);
-
-impl PartialEq for Structural<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl Eq for Structural<'_> {}
-
-impl Hash for Structural<'_> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_value(self.0, state);
-    }
-}
-
-/// Recursion is bounded by the decoder's `MAX_DEPTH`, so this cannot blow the
-/// stack on a crafted payload.
-fn hash_value<H: Hasher>(value: &Value, state: &mut H) {
-    std::mem::discriminant(value).hash(state);
-    match value {
-        Value::Int(int) => int.hash(state),
-        Value::BigInt {
-            negative,
-            magnitude,
-        } => {
-            negative.hash(state);
-            magnitude.hash(state);
-        }
-        Value::Bytes(bytes) => bytes.hash(state),
-        Value::Text(text) => text.hash(state),
-        Value::Array(items) => {
-            items.len().hash(state);
-            for item in items {
-                hash_value(item, state);
-            }
-        }
-        Value::Map(entries) => {
-            entries.len().hash(state);
-            for (key, entry) in entries {
-                hash_value(key, state);
-                hash_value(entry, state);
-            }
-        }
-        Value::Tag(tag, inner) => {
-            tag.hash(state);
-            hash_value(inner, state);
-        }
-        Value::Bool(flag) => flag.hash(state),
-        Value::Null | Value::Undefined => {}
-        Value::Simple(simple) => simple.hash(state),
-        // Matches the bit-pattern equality `Value` derives its `Eq` from.
-        Value::Float(float) => float.to_bits().hash(state),
-    }
 }
 
 #[cfg(test)]

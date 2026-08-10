@@ -12,8 +12,12 @@
 
 use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, Opts, Registry, TextEncoder};
 
-/// Coarse Koios call outcomes. Kept as a list so the metric can be
-/// pre-initialized and every series exists from process start.
+/// Coarse Koios call outcomes, mirroring `api/metrics.py`'s tuple of the same
+/// name. It is the vocabulary of the `outcome` label, not a pre-registration:
+/// like the Python client, a series appears only once its outcome first
+/// occurs, so a dashboard must treat an absent series as zero. Kept as a
+/// constant so the two implementations can be diffed and so the test suite can
+/// assert every outcome is a usable label.
 pub const KOIOS_OUTCOMES: &[&str] = &[
     "success",
     "tx_invalid",

@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value as Json;
 
-use crate::cbor::{decode_one, Value};
+use crate::cbor::{decode_hex, decode_one, Value};
 use crate::config::EnvironmentConfig;
 use crate::error::{ApiError, ApiResult};
 use crate::script_integrity::verify_script_data_hash;
@@ -87,8 +87,11 @@ pub fn validator_pointer(validator: &Json) -> Option<RedeemerPointer> {
 pub fn committed_redeemer_budgets(
     tx_cbor: &str,
 ) -> ApiResult<BTreeMap<RedeemerPointer, ExecutionUnits>> {
+    // `decode_hex`, not `hex::decode`: `check_cbor_hex` has already accepted
+    // this string under `bytes.fromhex` rules, and a stricter second decode
+    // here would reject a transaction the Django service goes on to sign.
     let bytes =
-        hex::decode(tx_cbor).map_err(|_| ApiError::validation("Invalid CBOR Data In Tx"))?;
+        decode_hex(tx_cbor).ok_or_else(|| ApiError::validation("Invalid CBOR Data In Tx"))?;
     // `cbor2.loads` decodes one value and ignores whatever follows it;
     // rejecting trailing bytes is `validators::cbor::check_tx_body`'s job and
     // it has already run by the time a request reaches here.
@@ -262,22 +265,16 @@ fn evaluation_results(response: &Json) -> ApiResult<&[Json]> {
         // transaction is bad while the service is the broken party. Ogmios's
         // own domain errors sit outside that range and are real verdicts.
         let error = &response["error"];
-        let code = error
-            .as_object()
-            .and_then(|error| error.get("code"))
-            .and_then(Json::as_i64);
-        return match code {
-            Some(code) if !JSONRPC_RESERVED.contains(&code) => {
-                Err(ApiError::validation("Transaction Fails Validation"))
-            }
-            _ => {
-                tracing::error!(
-                    target: "api",
-                    "Upstream Evaluation Rejected The Request: {}",
-                    error
-                );
-                Err(ApiError::Upstream)
-            }
+        let code = error.as_object().and_then(|error| error.get("code"));
+        return if is_domain_error_code(code) {
+            Err(ApiError::validation("Transaction Fails Validation"))
+        } else {
+            tracing::error!(
+                target: "api",
+                "Upstream Evaluation Rejected The Request: {}",
+                error
+            );
+            Err(ApiError::Upstream)
         };
     }
 
@@ -292,6 +289,33 @@ fn evaluation_results(response: &Json) -> ApiResult<&[Json]> {
             tracing::error!(target: "api", "Malformed Upstream Evaluation Response");
             Err(ApiError::Upstream)
         }
+    }
+}
+
+/// Whether a JSON-RPC `code` is a real Ogmios verdict rather than a
+/// protocol-level fault or an unreadable field.
+///
+/// Python asks `isinstance(code, int) and not isinstance(code, bool)` and then
+/// range-checks, so every integer outside the reserved range is a verdict
+/// there however large. `Json::as_i64` alone silently demoted codes above
+/// `i64::MAX` to an upstream failure, which is the one classification this
+/// pipeline treats as security-relevant: 503 says "our problem", 400 says
+/// "your transaction is bad".
+///
+/// `as_u64` closes that for codes up to `u64::MAX`, which is as far as this
+/// can go: `serde_json` parses a larger integer literal into an `f64`, where
+/// it is indistinguishable from a genuinely fractional code that Python would
+/// reject as a non-`int`. Guessing by magnitude would trade one unreachable
+/// divergence for another, so a code beyond `u64` stays an upstream failure.
+fn is_domain_error_code(code: Option<&Json>) -> bool {
+    let Some(Json::Number(number)) = code else {
+        return false;
+    };
+    match number.as_i64() {
+        Some(code) => !JSONRPC_RESERVED.contains(&code),
+        // Above i64::MAX but still an exact integer to serde_json, and no such
+        // value can land inside the reserved range.
+        None => number.is_u64(),
     }
 }
 
@@ -532,6 +556,35 @@ mod tests {
         ] {
             assert_eq!(detail(committed_redeemer_budgets(tx)), expected, "{tx}");
         }
+    }
+
+    /// `check_cbor_hex` accepts whitespace between byte pairs because
+    /// `bytes.fromhex` does. A stricter second decode here would reject a
+    /// transaction the Django service goes on to sign — two implementations,
+    /// opposite verdicts, identical input.
+    #[test]
+    fn whitespace_in_the_hex_is_accepted_as_bytes_fromhex_accepts_it() {
+        let expected: BTreeMap<RedeemerPointer, ExecutionUnits> = [((0, 0), (10, 10))].into();
+        let spaced: String = CONWAY_TX
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| format!("{} ", std::str::from_utf8(pair).expect("ascii hex")))
+            .collect();
+        for candidate in [
+            spaced.trim_end().to_string(),
+            format!("\n{CONWAY_TX}\t"),
+            format!("\u{b}{CONWAY_TX}\u{c}"),
+            CONWAY_TX.to_uppercase(),
+        ] {
+            assert_eq!(budgets(&candidate), expected, "{candidate:?}");
+        }
+        // Whitespace *inside* a byte pair is still an error, as in Python.
+        assert_eq!(
+            detail(committed_redeemer_budgets(
+                "8 4a0a105a182000082d87980820a0af5f6"
+            )),
+            "Invalid CBOR Data In Tx"
+        );
     }
 
     #[test]
@@ -801,6 +854,37 @@ mod tests {
                 "{code}"
             );
         }
+    }
+
+    /// Python range-checks every `int`, however large, so a code above
+    /// `i64::MAX` is a verdict there. Reading it with `as_i64` alone turned it
+    /// into a 503 — the service blaming itself for the caller's transaction.
+    #[test]
+    fn an_integer_code_above_i64_is_still_a_verdict() {
+        for code in [
+            "9223372036854775808",  // i64::MAX + 1
+            "18446744073709551615", // u64::MAX
+        ] {
+            let response: Json = serde_json::from_str(&format!(
+                r#"{{"jsonrpc":"2.0","method":"evaluateTransaction","error":{{"code":{code}}}}}"#
+            ))
+            .expect("valid JSON");
+            assert_eq!(
+                detail(check_evaluation(&response, &budgets(CONWAY_TX))),
+                "Transaction Fails Validation",
+                "{code}"
+            );
+        }
+        // Past u64 `serde_json` yields an f64 that cannot be told apart from a
+        // fractional code, so it stays an upstream failure by design.
+        let response: Json = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"evaluateTransaction","error":{"code":99999999999999999999}}"#,
+        )
+        .expect("valid JSON");
+        assert!(is_upstream(check_evaluation(
+            &response,
+            &budgets(CONWAY_TX)
+        )));
     }
 
     #[test]

@@ -242,8 +242,11 @@ pub fn tx_id(tx_cbor: &str) -> Result<String, KeyError> {
 
 /// The raw 32-byte body digest behind [`tx_id`].
 fn tx_body_hash(tx_cbor: &str) -> Result<Vec<u8>, KeyError> {
-    let tx_bytes =
-        hex::decode(tx_cbor).map_err(|_| KeyError::invalid("transaction CBOR is not valid hex"))?;
+    // `cbor::decode_hex`, not `hex::decode`: this string already passed
+    // `check_cbor_hex` under `bytes.fromhex` rules, and refusing it here would
+    // deny a witness the Django service issues for the same request.
+    let tx_bytes = cbor::decode_hex(tx_cbor)
+        .ok_or_else(|| KeyError::invalid("transaction CBOR is not valid hex"))?;
 
     // `[body, witness_set, is_valid, auxiliary_data]`: step over the outer
     // array header, note the offset, walk exactly one item, note it again.
@@ -459,6 +462,48 @@ mod tests {
         wide.extend_from_slice(&body);
         wide.extend_from_slice(&[0xa0, 0xf5, 0xf6]);
         assert_eq!(tx_id(&hex::encode(wide)).expect("wide header"), VALID_TX_ID);
+    }
+
+    /// The signing step is the last place the submitted hex is decoded, and it
+    /// has to accept everything `check_cbor_hex` let through. `hex::decode`
+    /// rejects the ASCII whitespace `bytes.fromhex` skips, so a transaction
+    /// Django witnesses would have died here with "not valid hex".
+    #[test]
+    fn tx_id_accepts_the_whitespace_bytes_fromhex_allows() {
+        let spaced: String = VALID_TX
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| format!("{} ", std::str::from_utf8(pair).expect("ascii hex")))
+            .collect();
+        for candidate in [
+            spaced.trim_end().to_string(),
+            format!("\n{VALID_TX}\t"),
+            format!("\u{b}{VALID_TX}\u{c}"),
+            VALID_TX.to_uppercase(),
+        ] {
+            assert_eq!(
+                tx_id(&candidate).unwrap_or_else(|err| panic!("{err}")),
+                VALID_TX_ID
+            );
+        }
+
+        // And the whole witness is byte-identical to the clean form's.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skey = dir.path().join("payment.skey");
+        write_key(&skey, &"11".repeat(32));
+        let pkh = "5ae193abe694a607531e20f85d8358ade9a474a4f45ac4e15e962da1";
+        let cache = KeyCache::new();
+        assert_eq!(
+            cache
+                .witness_tx_cbor(spaced.trim_end(), &skey, pkh)
+                .expect("spaced tx witnesses"),
+            cache
+                .witness_tx_cbor(VALID_TX, &skey, pkh)
+                .expect("clean tx witnesses")
+        );
+
+        // Whitespace *inside* a byte pair is still an error, as in Python.
+        assert!(tx_id(&format!("8 4{}", &VALID_TX[2..])).is_err());
     }
 
     #[test]

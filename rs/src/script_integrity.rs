@@ -9,13 +9,13 @@
 //! This module therefore uses `cbor::Decoder`'s byte-span tracking to slice
 //! witness fields 4 and 5 out of the submitted transaction verbatim.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use blake2::digest::consts::U32;
 use blake2::{Blake2b, Digest};
 use subtle::{Choice, ConstantTimeEq};
 
-use crate::cbor::{CborError, Decoder, Value, SET_TAG};
+use crate::cbor::{decode_hex, CborError, Decoder, Value, SET_TAG};
 
 /// Plutus language id (0 = V1, 1 = V2, 2 = V3, 3 = V4) to its cost model.
 pub type CostModels = BTreeMap<u8, Vec<i64>>;
@@ -67,35 +67,36 @@ fn container_length(
         })
 }
 
-/// One entry of a transaction map: its key as an integer (when it fits),
-/// the decoded value, and the value's exact wire bytes.
-struct MapItem<'a> {
-    key: Option<i128>,
-    value: Value,
-    raw: &'a [u8],
-}
-
-/// Walk a map, returning decoded keys and *raw* value bytes, rejecting
-/// duplicates.
+/// Walk a map, handing each entry's integer key, decoded value and *raw* value
+/// bytes to `visit`, and rejecting duplicate keys.
 ///
 /// Duplicates are rejected here even though `Value::map_get` elsewhere
 /// reproduces `cbor2`'s last-wins `dict` collapse: a second field 5 would let
 /// the redeemer bytes we hash differ from the ones a node reads.
-fn map_items<'a>(decoder: &mut Decoder<'a>) -> Result<Vec<MapItem<'a>>, ScriptIntegrityError> {
+///
+/// The Python original is a generator, and this stays streaming for the same
+/// reason: only three of the entries in the two maps are ever wanted, and a
+/// 16 KiB body packed with small entries would otherwise retain a fully
+/// decoded value tree per map for the duration of the walk. Seen keys go in a
+/// hash set rather than a list so an attacker-chosen key count cannot make the
+/// duplicate check quadratic.
+fn walk_map<'a>(
+    decoder: &mut Decoder<'a>,
+    mut visit: impl FnMut(Option<i128>, &Value, &'a [u8]),
+) -> Result<(), ScriptIntegrityError> {
     let length = container_length(decoder, 5)?;
-    let mut seen: Vec<Value> = Vec::new();
-    let mut items: Vec<MapItem<'a>> = Vec::new();
+    let mut seen: HashSet<Value> = HashSet::new();
     let mut remaining = length;
     loop {
         match remaining {
-            Some(0) => return Ok(items),
+            Some(0) => return Ok(()),
             // Indefinite maps end at the break; a truncated one runs out of
             // input in decode_value below instead.
             None if decoder.at_break() => {
                 decoder
                     .consume_break()
                     .map_err(|_| error("missing CBOR break"))?;
-                return Ok(items);
+                return Ok(());
             }
             _ => {}
         }
@@ -107,19 +108,14 @@ fn map_items<'a>(decoder: &mut Decoder<'a>) -> Result<Vec<MapItem<'a>>, ScriptIn
         if !matches!(key, Value::Int(_) | Value::BigInt { .. }) {
             return Err(error("transaction map key is not an integer"));
         }
-        if seen.contains(&key) {
+        let key_index = key.as_int();
+        if !seen.insert(key) {
             return Err(error("transaction map key is duplicated"));
         }
-        let key_index = key.as_int();
-        seen.push(key);
         let (value, raw) = decoder
             .decode_value_raw()
             .map_err(|_| error("invalid CBOR value"))?;
-        items.push(MapItem {
-            key: key_index,
-            value,
-            raw,
-        });
+        visit(key_index, &value, raw);
         if let Some(count) = remaining.as_mut() {
             *count -= 1;
         }
@@ -157,15 +153,18 @@ pub type ScriptDataParts = (Vec<u8>, Vec<u8>, Vec<u8>);
 /// the CBOR validators takes the last-wins `dict` semantics of `cbor2`.
 pub fn script_data_parts(tx_cbor_hex: &str) -> Result<ScriptDataParts, ScriptIntegrityError> {
     let data =
-        hex::decode(tx_cbor_hex).map_err(|_| error("transaction is not hexadecimal CBOR"))?;
+        decode_hex(tx_cbor_hex).ok_or_else(|| error("transaction is not hexadecimal CBOR"))?;
 
     // `cbor::Decoder` interprets only the bignum tags, where `cbor2` runs a
     // semantic decoder per tag and raises on a payload that does not fit its
     // expectation (tag 0 without a date string, tag 258 over unhashable
-    // items). Such a transaction is rejected here one step later — by the
-    // structural body validators, or by the hash simply not matching — rather
-    // than as a decode failure. Nothing that parses in both implementations
-    // yields different bytes; that is what the differential corpus checks.
+    // items). A body carrying one of those in a field no validator inspects is
+    // accepted here and refused by `cbor2`, so the two services disagree about
+    // whether to issue a witness. Nothing is at risk — the ledger's own decoder
+    // rejects such a body in phase 1, so the witness is unusable — but the
+    // divergence is real and closing it means porting `cbor2`'s per-tag
+    // semantics. Nothing that parses in both implementations yields different
+    // bytes; that is what the differential corpus checks.
     let mut decoder = Decoder::new(&data);
     let tx_length = container_length(&mut decoder, 4)?;
     if !matches!(tx_length, Some(4) | None) {
@@ -175,21 +174,21 @@ pub fn script_data_parts(tx_cbor_hex: &str) -> Result<ScriptDataParts, ScriptInt
     // A malformed field 11 is not reported until the whole envelope has been
     // walked, so a truncated transaction still reports truncation first.
     let mut committed_hash: Option<Value> = None;
-    for item in map_items(&mut decoder)? {
-        if item.key == Some(SCRIPT_DATA_HASH) {
-            committed_hash = Some(item.value);
+    walk_map(&mut decoder, |key, value, _raw| {
+        if key == Some(SCRIPT_DATA_HASH) {
+            committed_hash = Some(value.clone());
         }
-    }
+    })?;
 
     let mut redeemers: Option<Vec<u8>> = None;
     let mut datums: Vec<u8> = Vec::new();
-    for item in map_items(&mut decoder)? {
-        if item.key == Some(REDEEMERS) {
-            redeemers = Some(item.raw.to_vec());
-        } else if item.key == Some(DATUMS) {
-            datums = datum_bytes(&item.value, item.raw).to_vec();
+    walk_map(&mut decoder, |key, value, raw| {
+        if key == Some(REDEEMERS) {
+            redeemers = Some(raw.to_vec());
+        } else if key == Some(DATUMS) {
+            datums = datum_bytes(value, raw).to_vec();
         }
-    }
+    })?;
 
     // is_valid and auxiliary_data
     for _ in 0..2 {
@@ -260,10 +259,13 @@ fn language_view_pair(language: u8, costs: &[i64]) -> (Vec<u8>, Vec<u8>) {
 }
 
 /// Serialize already-encoded `(key, value)` pairs into the view map.
-fn assemble_language_views(pairs: &[(Vec<u8>, Vec<u8>)]) -> Result<Vec<u8>, ScriptIntegrityError> {
+///
+/// Pairs arrive by reference so a caller assembling one subset per iteration
+/// borrows them instead of deep-copying a multi-kilobyte PlutusV1 value.
+fn assemble_language_views(pairs: &[&(Vec<u8>, Vec<u8>)]) -> Result<Vec<u8>, ScriptIntegrityError> {
     // The ledger orders the already-encoded keys using canonical CBOR shortlex
     // ordering. This notably places V2/V3/V4 before V1 in a mixed map.
-    let mut ordered: Vec<&(Vec<u8>, Vec<u8>)> = pairs.iter().collect();
+    let mut ordered: Vec<&(Vec<u8>, Vec<u8>)> = pairs.to_vec();
     ordered.sort_by(|left, right| {
         left.0
             .len()
@@ -289,7 +291,7 @@ pub fn encode_language_views(cost_models: &CostModels) -> Result<Vec<u8>, Script
         .iter()
         .map(|(language, costs)| language_view_pair(*language, costs))
         .collect();
-    assemble_language_views(&pairs)
+    assemble_language_views(&pairs.iter().collect::<Vec<_>>())
 }
 
 fn blake2b_256(parts: &[&[u8]]) -> [u8; 32] {
@@ -342,11 +344,14 @@ pub fn verify_script_data_hash(
     let mut matched = Choice::from(0u8);
     // Languages are capped at four, so the subset mask stays inside a u8.
     for mask in 1u32..(1u32 << encoded.len()) {
-        let selected: Vec<(Vec<u8>, Vec<u8>)> = encoded
+        // Borrowed, not cloned: a PlutusV1 value is one CBOR integer per cost
+        // parameter, and copying it once per subset is hundreds of kilobytes
+        // of pure waste per signing request.
+        let selected: Vec<&(Vec<u8>, Vec<u8>)> = encoded
             .iter()
             .enumerate()
             .filter(|(index, _)| mask & (1 << index) != 0)
-            .map(|(_, pair)| pair.clone())
+            .map(|(_, pair)| pair)
             .collect();
         let language_views = assemble_language_views(&selected)?;
         let candidate = blake2b_256(&[&prefix, language_views.as_slice()]);
@@ -634,6 +639,87 @@ mod tests {
             assert_eq!(hex::encode(&redeemers), REDEEMER_HEX);
             assert!(datums.is_empty());
         }
+    }
+
+    /// The same string `check_cbor_hex` accepted has to be readable here.
+    /// `hex::decode` rejects the ASCII whitespace `bytes.fromhex` skips, which
+    /// made this the point where the Rust service refused a transaction the
+    /// Django service signs.
+    #[test]
+    fn whitespace_in_the_hex_is_accepted_as_bytes_fromhex_accepts_it() {
+        let hash = "00".repeat(32);
+        let tx = raw_tx(&hash, REDEEMER_HEX, None);
+        let spaced: String = tx
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| format!("{} ", std::str::from_utf8(pair).expect("ascii hex")))
+            .collect();
+        for candidate in [
+            spaced.trim_end().to_string(),
+            format!("\n{tx}\t"),
+            format!("\u{b}{tx}\u{c}"),
+            tx.to_uppercase(),
+        ] {
+            let (committed, redeemers, datums) =
+                script_data_parts(&candidate).unwrap_or_else(|err| panic!("{candidate}: {err}"));
+            assert_eq!(hex::encode(&committed), hash);
+            assert_eq!(hex::encode(&redeemers), REDEEMER_HEX);
+            assert!(datums.is_empty());
+        }
+        // Whitespace *inside* a byte pair is still an error, as in Python.
+        let err = script_data_parts(&format!("8 4{}", &tx[2..])).expect_err("split pair");
+        assert_eq!(err.to_string(), "transaction is not hexadecimal CBOR");
+    }
+
+    /// The duplicate-key check has to be a hash lookup, not a linear scan: the
+    /// key count is attacker-chosen inside the 16 KiB body cap, and the walk
+    /// runs on every signing request at the full throttle budget.
+    ///
+    /// A quadratic scan takes minutes on this input in a debug build; the
+    /// bound is loose enough that only a return to quadratic can trip it.
+    #[test]
+    fn a_large_key_count_does_not_make_the_walk_quadratic() {
+        use crate::cbor::{encode_bytes, encode_head, encode_uint};
+
+        const KEYS: u64 = 100_000;
+
+        /// `[body, {5: redeemers}, true, null]` where the body carries field
+        /// 11 followed by one zero-valued entry per key.
+        fn tx_with_body_keys(keys: &[u64]) -> String {
+            let mut body = encode_head(5, keys.len() as u64 + 1);
+            body.extend(encode_uint(SCRIPT_DATA_HASH as u64));
+            body.extend(encode_bytes(&[0u8; 32]));
+            for key in keys {
+                body.extend(encode_uint(*key));
+                body.extend(encode_uint(0));
+            }
+            format!("84{}a105{REDEEMER_HEX}f5f6", hex::encode(&body))
+        }
+
+        // Every key distinct, and none of them field 11.
+        let distinct: Vec<u64> = (0..KEYS)
+            .map(|key| key + SCRIPT_DATA_HASH as u64 + 1)
+            .collect();
+        let started = std::time::Instant::now();
+        let (committed, redeemers, _) =
+            script_data_parts(&tx_with_body_keys(&distinct)).expect("large body parses");
+        let elapsed = started.elapsed();
+        assert_eq!(hex::encode(&committed), "00".repeat(32));
+        assert_eq!(hex::encode(&redeemers), REDEEMER_HEX);
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "{KEYS} keys took {elapsed:?}; the duplicate check has gone quadratic"
+        );
+
+        // A duplicate is still caught when the two copies are that far apart.
+        let mut repeated = distinct.clone();
+        repeated[KEYS as usize - 1] = distinct[0];
+        assert_eq!(
+            script_data_parts(&tx_with_body_keys(&repeated))
+                .expect_err("duplicate")
+                .to_string(),
+            "transaction map key is duplicated"
+        );
     }
 
     #[test]

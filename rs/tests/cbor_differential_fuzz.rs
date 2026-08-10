@@ -345,7 +345,13 @@ fn the_five_divergence_classes_are_what_the_fixture_says_they_are() {
     assert_eq!(decode_exact(&deep), Err(CborError::DepthExceeded));
 
     // benign: cbor2 runs a semantic decoder for these tags and rejects the
-    // payload; the decoder keeps the tag and lets the validator reject it.
+    // payload; this decoder keeps the tag verbatim. In a body field the
+    // validators inspect, the tag then fails the shape check that follows. In a
+    // field none of them reads — 4, 5, 9, 18, 19, 20 — nothing downstream
+    // objects, so this service issues a witness where Django answers "Invalid
+    // CBOR Data In Tx". Benign because the ledger's own decoder refuses such a
+    // body in phase 1, which makes the witness unusable and leaves the
+    // collateral untouched; closing it means porting cbor2's per-tag semantics.
     for (hex, tag) in [
         ("c00000000000000000", 0u64),
         ("c40000000000000000", 4),
