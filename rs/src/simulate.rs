@@ -220,21 +220,21 @@ impl Upstream {
             Ok(response) => response,
             Err(CallFailure::TooLarge) => {
                 self.count(environment, "malformed");
-                tracing::warn!("Koios evaluation response was oversized for {environment}");
+                tracing::warn!(target: "api", "Koios evaluation response was oversized for {environment}");
                 return Err(UpstreamUnavailable(format!(
                     "koios {environment} returned an oversized evaluation response"
                 )));
             }
             Err(CallFailure::Timeout) => {
                 self.count(environment, "timeout");
-                tracing::warn!("Koios timeout for {environment}");
+                tracing::warn!(target: "api", "Koios timeout for {environment}");
                 return Err(UpstreamUnavailable(format!(
                     "koios {environment} timed out"
                 )));
             }
             Err(CallFailure::Request(error)) => {
                 self.count(environment, "request_error");
-                tracing::warn!("Koios request failed for {environment}: {error}");
+                tracing::warn!(target: "api", "Koios request failed for {environment}: {error}");
                 return Err(UpstreamUnavailable(format!(
                     "koios {environment} request failed"
                 )));
@@ -247,7 +247,7 @@ impl Upstream {
         // is bad.
         if !is_verdict_status(status) {
             self.count(environment, "http_error");
-            tracing::warn!("Koios returned {status} for {environment}");
+            tracing::warn!(target: "api", "Koios returned {status} for {environment}");
             return Err(UpstreamUnavailable(format!(
                 "koios {environment} returned {status}"
             )));
@@ -259,7 +259,7 @@ impl Upstream {
             Ok(body) => body,
             Err(error) => {
                 self.count(environment, "invalid_json");
-                tracing::warn!(
+                tracing::warn!(target: "api",
                     "Koios returned non-JSON (status={status}) for {environment}: {error}"
                 );
                 return Err(UpstreamUnavailable(format!(
@@ -270,7 +270,7 @@ impl Upstream {
 
         if !evaluation_envelope_is_valid(&body, &request_id) {
             self.count(environment, "malformed");
-            tracing::warn!("Koios returned a mismatched JSON-RPC response for {environment}");
+            tracing::warn!(target: "api", "Koios returned a mismatched JSON-RPC response for {environment}");
             return Err(UpstreamUnavailable(format!(
                 "koios {environment} returned a mismatched JSON-RPC response"
             )));
@@ -371,7 +371,7 @@ impl Upstream {
             Ok(response) => response,
             Err(CallFailure::TooLarge) => {
                 self.count(environment, "protocol_params_malformed");
-                tracing::warn!(
+                tracing::warn!(target: "api",
                     "Ogmios protocol parameters response was oversized for {environment}"
                 );
                 return Err(ProtocolParametersUnavailable(format!(
@@ -380,14 +380,14 @@ impl Upstream {
             }
             Err(CallFailure::Timeout) => {
                 self.count(environment, "protocol_params_timeout");
-                tracing::warn!("Ogmios protocol parameters timed out for {environment}");
+                tracing::warn!(target: "api", "Ogmios protocol parameters timed out for {environment}");
                 return Err(ProtocolParametersUnavailable(format!(
                     "ogmios {environment} protocol parameters timed out"
                 )));
             }
             Err(CallFailure::Request(error)) => {
                 self.count(environment, "protocol_params_request_error");
-                tracing::warn!("Ogmios protocol parameters failed for {environment}: {error}");
+                tracing::warn!(target: "api", "Ogmios protocol parameters failed for {environment}: {error}");
                 return Err(ProtocolParametersUnavailable(format!(
                     "ogmios {environment} protocol parameters failed"
                 )));
@@ -396,7 +396,7 @@ impl Upstream {
 
         if status != 200 {
             self.count(environment, "protocol_params_http_error");
-            tracing::warn!("Ogmios protocol parameters returned {status} for {environment}");
+            tracing::warn!(target: "api", "Ogmios protocol parameters returned {status} for {environment}");
             return Err(ProtocolParametersUnavailable(format!(
                 "ogmios {environment} protocol parameters returned {status}"
             )));
@@ -406,7 +406,7 @@ impl Upstream {
             Ok(body) => body,
             Err(_) => {
                 self.count(environment, "protocol_params_invalid_json");
-                tracing::warn!(
+                tracing::warn!(target: "api",
                     "Ogmios protocol parameters returned invalid JSON for {environment}"
                 );
                 return Err(ProtocolParametersUnavailable(format!(
@@ -417,7 +417,7 @@ impl Upstream {
 
         let Some(result) = protocol_parameters_result(&body, &request_id) else {
             self.count(environment, "protocol_params_malformed");
-            tracing::warn!("Ogmios returned mismatched protocol parameters for {environment}");
+            tracing::warn!(target: "api", "Ogmios returned mismatched protocol parameters for {environment}");
             return Err(ProtocolParametersUnavailable(format!(
                 "ogmios {environment} returned mismatched protocol parameters"
             )));
@@ -427,7 +427,7 @@ impl Upstream {
             Ok(parsed) => parsed,
             Err(error) => {
                 self.count(environment, "protocol_params_malformed");
-                tracing::warn!("Ogmios returned malformed protocol cost models for {environment}");
+                tracing::warn!(target: "api", "Ogmios returned malformed protocol cost models for {environment}");
                 return Err(error);
             }
         };
@@ -450,7 +450,7 @@ impl Upstream {
             Ok(permit) => Some(permit),
             Err(_) => {
                 self.count(environment, "capacity");
-                tracing::warn!("Koios admission budget exhausted for {environment} ({operation})");
+                tracing::warn!(target: "api", "Koios admission budget exhausted for {environment} ({operation})");
                 None
             }
         }
@@ -639,7 +639,7 @@ pub fn parse_protocol_cost_models(
         .collect();
     if !unknown.is_empty() {
         unknown.sort_unstable();
-        tracing::warn!(
+        tracing::warn!(target: "api",
             "Ignoring unknown Plutus cost model languages: {}",
             unknown.join(", ")
         );

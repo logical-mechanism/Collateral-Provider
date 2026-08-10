@@ -17,7 +17,7 @@
     "depth-cap": {
       "count": 4,
       "verdict": "rust-stricter",
-      "why": "MAX_DEPTH = 256 bounds recursion so a crafted payload cannot overflow the stack; cbor2 only fails around depth 500.",
+      "why": "MAX_DEPTH = 256 bounds recursion so a crafted payload cannot overflow the stack; cbor2 5.9.0 caps at 400 containers, so 257..=400 is accepted there and refused here; the deepest real transaction observed is 23.",
       "generators": {
         "corner-sweep": 4
       }
@@ -76,7 +76,7 @@
       "verdict": "rust-stricter",
       "class": "depth-cap",
       "generator": "corner-sweep",
-      "why": "MAX_DEPTH = 256 bounds recursion so a crafted payload cannot overflow the stack; cbor2 only fails around depth 500."
+      "why": "MAX_DEPTH = 256 bounds recursion so a crafted payload cannot overflow the stack; cbor2 5.9.0 caps at 400 containers, so 257..=400 is accepted there and refused here; the deepest real transaction observed is 23."
     },
     {
       "hex": "81818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818101",
@@ -85,7 +85,7 @@
       "verdict": "rust-stricter",
       "class": "depth-cap",
       "generator": "corner-sweep",
-      "why": "MAX_DEPTH = 256 bounds recursion so a crafted payload cannot overflow the stack; cbor2 only fails around depth 500."
+      "why": "MAX_DEPTH = 256 bounds recursion so a crafted payload cannot overflow the stack; cbor2 5.9.0 caps at 400 containers, so 257..=400 is accepted there and refused here; the deepest real transaction observed is 23."
     },
     {
       "hex": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f01ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -94,7 +94,7 @@
       "verdict": "rust-stricter",
       "class": "depth-cap",
       "generator": "corner-sweep",
-      "why": "MAX_DEPTH = 256 bounds recursion so a crafted payload cannot overflow the stack; cbor2 only fails around depth 500."
+      "why": "MAX_DEPTH = 256 bounds recursion so a crafted payload cannot overflow the stack; cbor2 5.9.0 caps at 400 containers, so 257..=400 is accepted there and refused here; the deepest real transaction observed is 23."
     },
     {
       "hex": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f01ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -103,7 +103,7 @@
       "verdict": "rust-stricter",
       "class": "depth-cap",
       "generator": "corner-sweep",
-      "why": "MAX_DEPTH = 256 bounds recursion so a crafted payload cannot overflow the stack; cbor2 only fails around depth 500."
+      "why": "MAX_DEPTH = 256 bounds recursion so a crafted payload cannot overflow the stack; cbor2 5.9.0 caps at 400 containers, so 257..=400 is accepted there and refused here; the deepest real transaction observed is 23."
     },
     {
       "hex": "f800",

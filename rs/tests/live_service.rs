@@ -227,8 +227,16 @@ async fn unknown_paths_and_methods_use_the_detail_envelope() {
     let url = format!("{}/livez", base);
     let response = client().delete(&url).send().await.expect("sends");
     assert_eq!(response.status(), 405);
+    // DRF quotes the verb and advertises the methods it does accept.
+    assert_eq!(
+        response
+            .headers()
+            .get("allow")
+            .and_then(|value| value.to_str().ok()),
+        Some("GET, HEAD, OPTIONS")
+    );
     let json: serde_json::Value = response.json().await.expect("JSON");
-    assert_eq!(detail(&json), "Method Not Allowed");
+    assert_eq!(detail(&json), "Method \"DELETE\" not allowed.");
 }
 
 // --- request shape --------------------------------------------------------
@@ -247,7 +255,11 @@ async fn a_non_json_content_type_is_415() {
     let (status, json) =
         post_with(base, "/preprod/collateral/", r#"{"tx":"00"}"#, "text/plain").await;
     assert_eq!(status, 415, "{json}");
-    assert_eq!(detail(&json), "Unsupported Media Type");
+    // DRF names the media type it refused.
+    assert_eq!(
+        detail(&json),
+        "Unsupported media type \"text/plain\" in request."
+    );
 }
 
 #[tokio::test]

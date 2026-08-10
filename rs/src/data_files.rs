@@ -86,10 +86,10 @@ impl ReloadingJson {
                     // Only worth a warning once we've served real content;
                     // "never existed" is a supported configuration.
                     if state.identity.is_some() {
-                        tracing::warn!("Reloadable file disappeared: {}", self.path.display());
+                        tracing::warn!(target: "api", "Reloadable file disappeared: {}", self.path.display());
                     }
                 } else {
-                    tracing::error!("Failed to stat {}: {}", self.path.display(), err);
+                    tracing::error!(target: "api", "Failed to stat {}: {}", self.path.display(), err);
                 }
                 return state.data.clone();
             }
@@ -105,7 +105,7 @@ impl ReloadingJson {
         let identity = match file_identity(&self.path) {
             Ok(identity) => identity,
             Err(err) => {
-                tracing::error!("Failed to stat {}: {}", self.path.display(), err);
+                tracing::error!(target: "api", "Failed to stat {}: {}", self.path.display(), err);
                 return state.data.clone();
             }
         };
@@ -120,7 +120,7 @@ impl ReloadingJson {
         let file = match std::fs::File::open(&self.path) {
             Ok(file) => file,
             Err(err) => {
-                tracing::error!("Failed to read {}: {}", self.path.display(), err);
+                tracing::error!(target: "api", "Failed to read {}: {}", self.path.display(), err);
                 return state.data.clone();
             }
         };
@@ -131,7 +131,7 @@ impl ReloadingJson {
         let attempted = match file.metadata() {
             Ok(metadata) => stat_identity(&metadata),
             Err(err) => {
-                tracing::error!("Failed to read {}: {}", self.path.display(), err);
+                tracing::error!(target: "api", "Failed to read {}: {}", self.path.display(), err);
                 return state.data.clone();
             }
         };
@@ -143,7 +143,7 @@ impl ReloadingJson {
             // A read failure is transient; a syntax error is an operator
             // mistake and must not be retried on every request.
             Err(err) if err.is_io() => {
-                tracing::error!("Failed to read {}: {}", self.path.display(), err);
+                tracing::error!(target: "api", "Failed to read {}: {}", self.path.display(), err);
                 return state.data.clone();
             }
             Err(err) => return self.reject(state, attempted, &err.to_string()),
@@ -158,7 +158,7 @@ impl ReloadingJson {
         let data = Arc::new(new_data);
         state.data = data.clone();
         state.identity = Some(attempted);
-        tracing::info!("Reloaded {}", self.path.display());
+        tracing::info!(target: "api", "Reloaded {}", self.path.display());
         data
     }
 
@@ -173,7 +173,7 @@ impl ReloadingJson {
         reason: &str,
     ) -> Arc<serde_json::Value> {
         state.identity = Some(attempted);
-        tracing::error!(
+        tracing::error!(target: "api",
             "Rejected invalid data in {}: {}",
             self.path.display(),
             reason

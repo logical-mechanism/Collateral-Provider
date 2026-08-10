@@ -21,14 +21,13 @@ use std::time::Instant;
 
 use axum::extract::rejection::PathRejection;
 use axum::extract::{ConnectInfo, Path, Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn, from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post};
+use axum::routing::{any, get};
 use axum::Router;
 use futures_util::FutureExt;
 use serde_json::{json, Value as JsonValue};
-use tower_http::cors::{Any, CorsLayer};
 
 use crate::error::{detail_response, ApiError, ApiResult};
 use crate::health::readiness_problems;
@@ -39,13 +38,31 @@ use crate::state::AppState;
 use crate::throttle::ThrottleDecision;
 use crate::VERSION;
 
-/// `prometheus_client.CONTENT_TYPE_LATEST`.
+/// The Prometheus text exposition format this binary emits.
+///
+/// Deliberately pinned rather than tracking `prometheus_client`: the Python
+/// service's pinned 0.25.0 advertises `version=1.0.0`, but the two formats are
+/// wire-identical for the counter and histogram families used here, and every
+/// scraper in circulation accepts 0.0.4.
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 
 /// The throttle bucket for a caller whose address could not be established.
 /// DRF formats `None` into its cache key, so those callers share one bucket
 /// there too — never an unlimited one.
 const UNIDENTIFIED: &str = "unidentified";
+
+/// `Allow` for the collateral endpoint, matching DRF's `allowed_methods`.
+const COLLATERAL_ALLOW: &str = "POST, OPTIONS";
+
+/// `Allow` for the read-only endpoints. Unlike DRF these also serve `HEAD`,
+/// which axum derives from the `GET` handler — see rs/README.md.
+const READ_ONLY_ALLOW: &str = "GET, HEAD, OPTIONS";
+
+/// A forwarded hop that could not be read as text. `net::client_ip` fails
+/// closed on an unparseable hop, so substituting a token that can never parse
+/// reproduces what Django does with a header byte it cannot decode, while
+/// keeping the position of the surrounding hops intact.
+const UNREADABLE_HOP: &str = "?";
 
 /// Build the full router with middleware applied in the same order as the
 /// Django stack: CORS, request id, metrics, body limit, host check.
@@ -54,8 +71,13 @@ pub fn app(state: AppState) -> Router {
     // inside-out: catch-panic sits closest to the handlers (so the metrics
     // middleware still observes a panic as a 500) and CORS sits outermost.
     Router::new()
-        .route("/{environment}/collateral", post(collateral))
-        .route("/{environment}/collateral/", post(collateral))
+        // `any`, not `post`: DRF throttles in `initial()`, which runs before
+        // method dispatch, so a wrong method on the collateral path is metered
+        // too. Routing POST alone would hand those to the router's 405
+        // fallback, leaving the endpoint's only abuse control off for a request
+        // `body_limit` has already buffered up to the cap.
+        .route("/{environment}/collateral", any(collateral_entry))
+        .route("/{environment}/collateral/", any(collateral_entry))
         .route("/healthz", get(healthz))
         .route("/healthz/", get(healthz))
         .route("/livez", get(livez))
@@ -79,23 +101,106 @@ pub fn app(state: AppState) -> Router {
         ))
         .layer(from_fn_with_state(state.clone(), host::middleware))
         .layer(from_fn(request_id::middleware))
+        .layer(from_fn(security_headers))
         // `CORS_ALLOW_ALL_ORIGINS = True`: any page may make its visitors call
         // the endpoint, which is why the throttle keys on the visitor's IP.
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
+        .layer(from_fn(cors))
         .with_state(state)
 }
 
 /// The static OpenAPI document served at `/api/schema`.
 pub const OPENAPI_JSON: &str = include_str!("openapi.json");
 
+// --- cross-cutting response shaping ------------------------------------------
+
+/// Django's `SecurityMiddleware` and `XFrameOptionsMiddleware` defaults, which
+/// the Python service ships and this one was missing entirely.
+///
+/// `nosniff` is the one that matters for a JSON API: without it a browser may
+/// guess a content type for an error body and render it.
+async fn security_headers(request: Request, next: Next) -> Response {
+    const HEADERS: [(HeaderName, HeaderValue); 4] = [
+        (
+            HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        ),
+        (
+            HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("DENY"),
+        ),
+        (
+            HeaderName::from_static("referrer-policy"),
+            HeaderValue::from_static("same-origin"),
+        ),
+        (
+            HeaderName::from_static("cross-origin-opener-policy"),
+            HeaderValue::from_static("same-origin"),
+        ),
+    ];
+
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    for (name, value) in HEADERS {
+        headers.insert(name, value);
+    }
+    response
+}
+
+/// `CORS_ALLOW_ALL_ORIGINS = True`, as django-cors-headers implements it.
+///
+/// Only a genuine preflight — `OPTIONS` carrying `Access-Control-Request-Method`
+/// — is answered here. A bare `OPTIONS` is routed like any other request, so a
+/// mistyped path still answers 404 and the collateral endpoint still answers
+/// with DRF's metadata document. A blanket CORS layer replies 200 with an empty
+/// body to *every* `OPTIONS`, which makes a typo look like a success for the
+/// same reason this service does not redirect unknown paths.
+async fn cors(request: Request, next: Next) -> Response {
+    let origin = request.headers().get(header::ORIGIN).cloned();
+    let preflight = request.method() == Method::OPTIONS
+        && request
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD);
+
+    let mut response = if preflight {
+        let mut response = StatusCode::OK.into_response();
+        let headers = response.headers_mut();
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("DELETE, GET, OPTIONS, PATCH, POST, PUT"),
+        );
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            HeaderValue::from_static(
+                "accept, authorization, content-type, user-agent, x-csrftoken, x-requested-with",
+            ),
+        );
+        headers.insert(
+            header::ACCESS_CONTROL_MAX_AGE,
+            HeaderValue::from_static("86400"),
+        );
+        response
+    } else {
+        next.run(request).await
+    };
+
+    let headers = response.headers_mut();
+    // Always varies on origin, even when no origin was sent: the response would
+    // have carried `Access-Control-Allow-Origin` had one been, so a cache must
+    // not serve this copy to a cross-origin request.
+    headers.insert(header::VARY, HeaderValue::from_static("origin"));
+    if origin.is_some() {
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_static("*"),
+        );
+    }
+    response
+}
+
 // --- collateral --------------------------------------------------------------
 
-async fn collateral(
+/// Throttle, then dispatch on method — the order DRF's `initial()` imposes.
+async fn collateral_entry(
     State(state): State<AppState>,
     environment: Result<Path<String>, PathRejection>,
     request: Request,
@@ -113,6 +218,35 @@ async fn collateral(
         return throttled_response(retry_after);
     }
 
+    match *request.method() {
+        Method::POST => collateral(state, environment, request, ip_address).await,
+        // DRF answers OPTIONS with its metadata document, not an empty body.
+        Method::OPTIONS => collateral_metadata(),
+        ref method => method_not_allowed_for(method, COLLATERAL_ALLOW),
+    }
+}
+
+/// `SimpleMetadata`'s document for `ProvideCollateralView`.
+fn collateral_metadata() -> Response {
+    let mut response = axum::Json(json!({
+        "name": "Provide Collateral",
+        "description": "",
+        "renders": ["application/json"],
+        "parses": ["application/json"],
+    }))
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::ALLOW, HeaderValue::from_static(COLLATERAL_ALLOW));
+    response
+}
+
+async fn collateral(
+    state: AppState,
+    environment: Result<Path<String>, PathRejection>,
+    request: Request,
+    ip_address: Option<String>,
+) -> Response {
     // A path segment that will not percent-decode names no configured
     // network, so it gets the same answer as any other unknown one.
     let Ok(Path(environment)) = environment else {
@@ -129,7 +263,15 @@ async fn collateral(
     };
 
     if !is_json_content_type(request.headers()) {
-        return detail_response(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Unsupported Media Type");
+        // DRF names the media type it refused; a bare "Unsupported Media Type"
+        // leaves the caller guessing which header was wrong.
+        return detail_response(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            &format!(
+                "Unsupported media type \"{}\" in request.",
+                raw_content_type(request.headers()).unwrap_or_default()
+            ),
+        );
     }
 
     let (_parts, body) = request.into_parts();
@@ -143,13 +285,19 @@ async fn collateral(
         }
     };
 
-    let payload: JsonValue = match serde_json::from_slice(&bytes) {
-        Ok(payload) => payload,
-        // DRF's JSONParser wraps the decoder's own message, which names the
-        // offending line and column — the only thing that makes a malformed
-        // body debuggable from the response alone.
-        Err(err) => {
-            return ApiError::validation(format!("JSON parse error - {err}")).into_response()
+    let payload: JsonValue = if bytes.is_empty() {
+        // DRF's JSONParser yields an empty dict for an empty stream, so the
+        // caller hears about the missing field rather than a parse error.
+        JsonValue::Object(serde_json::Map::new())
+    } else {
+        match serde_json::from_slice(&bytes) {
+            Ok(payload) => payload,
+            // DRF's JSONParser wraps the decoder's own message, which names the
+            // offending line and column — the only thing that makes a malformed
+            // body debuggable from the response alone.
+            Err(err) => {
+                return ApiError::validation(format!("JSON parse error - {err}")).into_response()
+            }
         }
     };
 
@@ -174,11 +322,19 @@ async fn collateral(
             // identity and an on-chain transaction, contrary to the service's
             // privacy goal. The request ID still correlates this line with
             // errors and timings from the same request.
+            //
+            // `env` and `duration_ms` are emitted as fields as well as in the
+            // message: the JSON formatter promotes fields to top-level keys, so
+            // a log pipeline can index them, while the text formatter drops
+            // fields and needs them spelled out in the message.
+            let duration_ms = started.elapsed().as_millis();
             tracing::info!(
                 target: "api",
+                env = %environment,
+                duration_ms = duration_ms,
                 "Witness issued: env={} duration_ms={}",
                 environment,
-                started.elapsed().as_millis()
+                duration_ms
             );
             (StatusCode::OK, axum::Json(json!({ "witness": witness }))).into_response()
         }
@@ -200,7 +356,9 @@ struct CollateralRequest {
 /// about both `tx` and `additional_utxos` hears about `tx`.
 fn parse_request(payload: &JsonValue) -> ApiResult<CollateralRequest> {
     if payload.is_null() {
-        return Err(ApiError::validation("This field may not be null."));
+        // DRF's `Serializer.run_validation` special-cases a null root before
+        // any field validation, so the message names the body, not a field.
+        return Err(ApiError::validation("No data provided"));
     }
     let Some(object) = payload.as_object() else {
         return Err(ApiError::validation(format!(
@@ -297,17 +455,33 @@ fn throttled_response(retry_after: u64) -> Response {
     response
 }
 
-/// Parser negotiation, not renderer negotiation: a form-encoded or multipart
-/// body gets the documented 415 rather than being silently accepted.
-fn is_json_content_type(headers: &HeaderMap) -> bool {
-    let Some(raw) = headers
+/// The raw `Content-Type` header, as DRF's `request.content_type` sees it.
+fn raw_content_type(headers: &HeaderMap) -> Option<&str> {
+    headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-    else {
-        return false;
+}
+
+/// Parser negotiation, not renderer negotiation: a form-encoded or multipart
+/// body gets the documented 415 rather than being silently accepted.
+///
+/// DRF selects a parser whose media type *matches* the request's, and wildcards
+/// match on either side. So `application/json`, `application/*` and `*/*` all
+/// reach `JSONParser`, and a request with no `Content-Type` at all falls
+/// through to the default parser rather than being refused.
+fn is_json_content_type(headers: &HeaderMap) -> bool {
+    let Some(raw) = raw_content_type(headers) else {
+        return true;
     };
     let media_type = raw.split(';').next().unwrap_or(raw).trim();
-    media_type.eq_ignore_ascii_case("application/json")
+    if media_type.is_empty() {
+        return true;
+    }
+    let Some((main, sub)) = media_type.split_once('/') else {
+        return false;
+    };
+    (main == "*" || main.eq_ignore_ascii_case("application"))
+        && (sub == "*" || sub.eq_ignore_ascii_case("json"))
 }
 
 /// One place decides who the caller is, so bans, metrics authorization, and
@@ -317,11 +491,26 @@ fn client_ip_of(request: &Request, state: &AppState) -> Option<String> {
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ConnectInfo(address)| address.ip());
-    let forwarded = request
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok());
-    net::client_ip(peer, forwarded, &state.config.trusted_proxy_ips)
+    let forwarded = forwarded_chain(request.headers());
+    net::client_ip(peer, forwarded.as_deref(), &state.config.trusted_proxy_ips)
+}
+
+/// Join every `X-Forwarded-For` line into one chain, as WSGI does.
+///
+/// gunicorn merges duplicate request headers with a comma before Django ever
+/// sees them, so `_client_ip` walks the whole chain. `HeaderMap::get` returns
+/// only the *first* line, which would let a caller split a spoofed prefix into
+/// its own header and win the right-to-left walk — choosing the identity used
+/// for throttling, ban matching and the `/metrics` allowlist.
+fn forwarded_chain(headers: &HeaderMap) -> Option<String> {
+    let mut chain = String::new();
+    for value in headers.get_all("x-forwarded-for") {
+        if !chain.is_empty() {
+            chain.push(',');
+        }
+        chain.push_str(value.to_str().unwrap_or(UNREADABLE_HOP));
+    }
+    (!chain.is_empty()).then_some(chain)
 }
 
 // --- operational endpoints ---------------------------------------------------
@@ -387,8 +576,23 @@ async fn not_found() -> Response {
     detail_response(StatusCode::NOT_FOUND, "Not Found")
 }
 
-async fn method_not_allowed() -> Response {
-    detail_response(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed")
+/// Only the read-only routes reach this: the collateral endpoint routes `any`
+/// so it can throttle first, and `/metrics` routes `any` so it can 404.
+async fn method_not_allowed(request: Request) -> Response {
+    method_not_allowed_for(request.method(), READ_ONLY_ALLOW)
+}
+
+/// DRF's `MethodNotAllowed`, including the quoted verb and the `Allow` header
+/// its exception handler attaches.
+fn method_not_allowed_for(method: &Method, allow: &'static str) -> Response {
+    let mut response = detail_response(
+        StatusCode::METHOD_NOT_ALLOWED,
+        &format!("Method \"{method}\" not allowed."),
+    );
+    response
+        .headers_mut()
+        .insert(header::ALLOW, HeaderValue::from_static(allow));
+    response
 }
 
 fn no_store(mut response: Response) -> Response {
@@ -604,7 +808,7 @@ mod tests {
             parse_request(&JsonValue::Null)
                 .expect_err("rejected")
                 .detail(),
-            "This field may not be null."
+            "No data provided"
         );
     }
 
@@ -618,9 +822,17 @@ mod tests {
         assert!(with("application/json"));
         assert!(with("application/json; charset=utf-8"));
         assert!(with("Application/JSON"));
+        // DRF matches parsers on wildcards from either side, and falls through
+        // to the default parser when the header is absent or empty.
+        assert!(with("application/*"));
+        assert!(with("*/*"));
+        assert!(with(""));
+        assert!(is_json_content_type(&HeaderMap::new()));
         assert!(!with("text/plain"));
+        assert!(!with("text/json"));
+        assert!(!with("application/xml"));
         assert!(!with("application/x-www-form-urlencoded"));
-        assert!(!is_json_content_type(&HeaderMap::new()));
+        assert!(!with("json"));
     }
 
     #[test]
@@ -666,10 +878,214 @@ mod tests {
     async fn a_wrong_method_on_a_known_path_is_405() {
         let response = send(router(), get_request("/preprod/collateral")).await;
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        // DRF quotes the verb and advertises OPTIONS alongside POST.
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ALLOW)
+                .and_then(|value| value.to_str().ok()),
+            Some("POST, OPTIONS")
+        );
         assert_eq!(
             body_json(response).await,
-            json!({"detail": "Method Not Allowed"})
+            json!({"detail": "Method \"GET\" not allowed."})
         );
+
+        let response = send(router(), get_request("/known_hosts/")).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let request = Request::builder()
+            .method("DELETE")
+            .uri("/known_hosts/")
+            .header(header::HOST, "127.0.0.1")
+            .body(Body::empty())
+            .expect("request builds");
+        let response = send(router(), request).await;
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(
+            body_json(response).await,
+            json!({"detail": "Method \"DELETE\" not allowed."})
+        );
+    }
+
+    #[test]
+    fn every_forwarded_header_line_joins_into_one_chain() {
+        // gunicorn merges duplicate headers with a comma before Django sees
+        // them. Reading only the first line would let a caller split a spoofed
+        // prefix into its own header and win the right-to-left walk.
+        let mut headers = HeaderMap::new();
+        assert_eq!(forwarded_chain(&headers), None);
+
+        headers.append("x-forwarded-for", HeaderValue::from_static("9.9.9.9"));
+        assert_eq!(forwarded_chain(&headers).as_deref(), Some("9.9.9.9"));
+
+        headers.append("x-forwarded-for", HeaderValue::from_static("1.2.3.4"));
+        assert_eq!(
+            forwarded_chain(&headers).as_deref(),
+            Some("9.9.9.9,1.2.3.4")
+        );
+    }
+
+    #[test]
+    fn a_split_forwarded_header_cannot_pick_the_client_identity() {
+        use crate::net;
+        let trusted = net::parse_networks(&["127.0.0.1".to_string()]);
+        let peer = Some("127.0.0.1".parse().expect("valid ip"));
+
+        let mut split = HeaderMap::new();
+        split.append("x-forwarded-for", HeaderValue::from_static("9.9.9.9"));
+        split.append("x-forwarded-for", HeaderValue::from_static("1.2.3.4"));
+        let mut merged = HeaderMap::new();
+        merged.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("9.9.9.9,1.2.3.4"),
+        );
+
+        // The two are the same bytes on the wire, so they must resolve alike —
+        // to the hop the trusted proxy appended, not the caller's prefix.
+        let of = |headers: &HeaderMap| {
+            net::client_ip(peer, forwarded_chain(headers).as_deref(), &trusted)
+        };
+        assert_eq!(of(&split).as_deref(), Some("1.2.3.4"));
+        assert_eq!(of(&split), of(&merged));
+    }
+
+    #[test]
+    fn an_unreadable_forwarded_hop_keeps_the_positions_of_the_rest() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            "x-forwarded-for",
+            HeaderValue::from_bytes(b"\xff").expect("opaque header value"),
+        );
+        headers.append("x-forwarded-for", HeaderValue::from_static("1.2.3.4"));
+        // The unreadable line becomes a hop that cannot parse rather than
+        // vanishing, so the rightmost hop is still read first.
+        assert_eq!(forwarded_chain(&headers).as_deref(), Some("?,1.2.3.4"));
+    }
+
+    #[tokio::test]
+    async fn every_response_carries_djangos_security_headers() {
+        let response = send(router(), get_request("/livez")).await;
+        let headers = response.headers().clone();
+        for (name, value) in [
+            ("x-content-type-options", "nosniff"),
+            ("x-frame-options", "DENY"),
+            ("referrer-policy", "same-origin"),
+            ("cross-origin-opener-policy", "same-origin"),
+        ] {
+            assert_eq!(
+                headers.get(name).and_then(|v| v.to_str().ok()),
+                Some(value),
+                "{name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn only_a_real_preflight_short_circuits_options() {
+        // With Access-Control-Request-Method this is a preflight and answers
+        // 200 with the CORS headers a browser needs.
+        let preflight = Request::builder()
+            .method("OPTIONS")
+            .uri("/nope")
+            .header(header::HOST, "127.0.0.1")
+            .header(header::ORIGIN, "https://example.com")
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+            .body(Body::empty())
+            .expect("request builds");
+        let response = send(router(), preflight).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_MAX_AGE)
+                .and_then(|v| v.to_str().ok()),
+            Some("86400")
+        );
+
+        // Without it, the request routes normally — so a mistyped path is a
+        // 404 rather than an empty 200 that reads as success.
+        let bare = Request::builder()
+            .method("OPTIONS")
+            .uri("/nope")
+            .header(header::HOST, "127.0.0.1")
+            .body(Body::empty())
+            .expect("request builds");
+        let response = send(router(), bare).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(body_json(response).await, json!({"detail": "Not Found"}));
+    }
+
+    #[tokio::test]
+    async fn options_on_the_collateral_path_returns_drf_metadata() {
+        let request = Request::builder()
+            .method("OPTIONS")
+            .uri("/preprod/collateral/")
+            .header(header::HOST, "127.0.0.1")
+            .body(Body::empty())
+            .expect("request builds");
+        let response = send(router(), request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ALLOW)
+                .and_then(|v| v.to_str().ok()),
+            Some("POST, OPTIONS")
+        );
+        assert_eq!(
+            body_json(response).await,
+            json!({
+                "name": "Provide Collateral",
+                "description": "",
+                "renders": ["application/json"],
+                "parses": ["application/json"],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_body_names_the_missing_field() {
+        // DRF's JSONParser yields an empty dict for an empty stream, so the
+        // caller hears about `tx` rather than a parse error.
+        let (status, detail) = collateral_detail("").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(detail, "Missing required field: 'tx'");
+    }
+
+    #[tokio::test]
+    async fn a_wildcard_content_type_is_parsed_as_json() {
+        for content_type in ["application/*", "*/*"] {
+            let body = r#"{"tx":"zz"}"#;
+            let request = Request::builder()
+                .method("POST")
+                .uri("/preprod/collateral")
+                .header(header::HOST, "127.0.0.1")
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CONTENT_LENGTH, body.len())
+                .body(Body::from(body))
+                .expect("request builds");
+            let response = send(router(), request).await;
+            // Parsed, then refused by a validator — not refused as a media type.
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{content_type}");
+            assert_eq!(
+                body_json(response).await,
+                json!({"detail": "Invalid Hex Data In Tx"}),
+                "{content_type}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_wrong_method_still_spends_throttle_budget() {
+        let mut config = test_config();
+        config.throttle_rate = "1/min".parse().expect("valid rate");
+        let router = router_with(config);
+
+        let first = send(router.clone(), get_request("/preprod/collateral/")).await;
+        assert_eq!(first.status(), StatusCode::METHOD_NOT_ALLOWED);
+        // DRF meters in `initial()`, before method dispatch, so the 405 counts.
+        let second = send(router, get_request("/preprod/collateral/")).await;
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]
@@ -826,9 +1242,10 @@ mod tests {
             .expect("request builds");
         let response = send(router(), request).await;
         assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        // DRF names the media type it refused.
         assert_eq!(
             body_json(response).await,
-            json!({"detail": "Unsupported Media Type"})
+            json!({"detail": "Unsupported media type \"text/plain\" in request."})
         );
     }
 

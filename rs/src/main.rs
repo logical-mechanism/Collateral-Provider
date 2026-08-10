@@ -49,6 +49,25 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Presentation data, not a signing dependency, so an absent registry is not
+    // fatal — but serving an empty `/known_hosts/` silently is how a container
+    // ends up publishing `{}` without anyone noticing. The image does not carry
+    // the file: the Docker build context is `rs/` and the registry lives at the
+    // repo root, so `KNOWN_HOSTS_PATH` has to point at a mounted copy.
+    match state.known_hosts.get().as_object().map(|hosts| hosts.len()) {
+        Some(count) if count > 0 => tracing::info!(
+            target: "api",
+            "Known-hosts registry loaded: {} host(s) from {}",
+            count,
+            state.config.known_hosts_path.display()
+        ),
+        _ => tracing::warn!(
+            target: "api",
+            "Known-hosts registry is empty; /known_hosts/ will serve an empty object (looked in {})",
+            state.config.known_hosts_path.display()
+        ),
+    }
+
     let listener = match tokio::net::TcpListener::bind(bind_address).await {
         Ok(listener) => listener,
         Err(err) => {

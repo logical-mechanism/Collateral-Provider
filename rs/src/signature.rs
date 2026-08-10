@@ -145,13 +145,19 @@ impl KeyCache {
         let skey = self.get_key_from_file(skey_path)?;
         let vkey = self.get_key_from_file(vkey_path)?;
 
-        let (skey_bytes, vkey_bytes, pkh_bytes) =
-            match (hex::decode(&skey), hex::decode(&vkey), hex::decode(pkh)) {
-                (Ok(skey_bytes), Ok(vkey_bytes), Ok(pkh_bytes)) => {
-                    (skey_bytes, vkey_bytes, pkh_bytes)
-                }
-                _ => return Err(KeyError::invalid("signing identity contains non-hex data")),
-            };
+        // `cbor::decode_hex`, not `hex::decode`: the Python service reads this
+        // material with `bytes.fromhex`, which skips ASCII whitespace. A key
+        // file or PKH that Django loads must not stop this binary booting.
+        let (skey_bytes, vkey_bytes, pkh_bytes) = match (
+            cbor::decode_hex(&skey),
+            cbor::decode_hex(&vkey),
+            cbor::decode_hex(pkh),
+        ) {
+            (Some(skey_bytes), Some(vkey_bytes), Some(pkh_bytes)) => {
+                (skey_bytes, vkey_bytes, pkh_bytes)
+            }
+            _ => return Err(KeyError::invalid("signing identity contains non-hex data")),
+        };
 
         let seed = <[u8; KEY_LEN]>::try_from(skey_bytes.as_slice())
             .map_err(|_| KeyError::invalid("signing key must contain exactly 32 bytes"))?;
@@ -198,11 +204,13 @@ impl KeyCache {
         // Everything the Python `try` block covers — hex decoding of both the
         // key and the PKH, plus constructing the key — collapses to the same
         // opaque message, so a bad key never describes itself to a caller.
-        let (seed, pkh) = match (hex::decode(&skey), hex::decode(expected_pkh)) {
-            (Ok(skey_bytes), Ok(pkh)) => match <[u8; KEY_LEN]>::try_from(skey_bytes.as_slice()) {
-                Ok(seed) => (seed, pkh),
-                Err(_) => return Err(KeyError::invalid("signing identity is invalid")),
-            },
+        let (seed, pkh) = match (cbor::decode_hex(&skey), cbor::decode_hex(expected_pkh)) {
+            (Some(skey_bytes), Some(pkh)) => {
+                match <[u8; KEY_LEN]>::try_from(skey_bytes.as_slice()) {
+                    Ok(seed) => (seed, pkh),
+                    Err(_) => return Err(KeyError::invalid("signing identity is invalid")),
+                }
+            }
             _ => return Err(KeyError::invalid("signing identity is invalid")),
         };
 

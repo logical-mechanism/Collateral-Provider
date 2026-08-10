@@ -13,8 +13,14 @@ use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Bound on distinct identities tracked at once, mirroring the Python cache's
-/// `MAX_ENTRIES`. Beyond this the oldest-touched identities are evicted.
+/// Bound on distinct identities tracked at once. Beyond this the
+/// oldest-touched identities are evicted.
+///
+/// Deliberately larger than the Python cache's `MAX_ENTRIES` of 2000
+/// (`settings.py`): that value is a bound on a *file-based* cache, where each
+/// entry is a file and culling costs a directory walk. An in-process map of
+/// `(String, VecDeque<Instant>)` is cheap enough to hold an order of magnitude
+/// more, and every evicted identity is one whose budget silently resets.
 pub const DEFAULT_MAX_ENTRIES: usize = 20_000;
 
 /// A `"<count>/<period>"` rate, where period is `sec`/`min`/`hour`/`day`

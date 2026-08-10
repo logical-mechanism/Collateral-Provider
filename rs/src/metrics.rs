@@ -111,7 +111,7 @@ impl Metrics {
             Err(error) => {
                 // Scraping is best-effort telemetry; an encoder failure must
                 // not take down the endpoint that reports it.
-                tracing::error!("Failed to encode Prometheus metrics: {}", error);
+                tracing::error!(target: "api", "Failed to encode Prometheus metrics: {}", error);
                 String::new()
             }
         }

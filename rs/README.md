@@ -68,9 +68,9 @@ gives them to you reliably:
 
 Hand-rolling also buys exact control over the semantics the Python service
 inherits from `cbor2`: tag-258 sets in both Conway encodings, last-wins
-duplicate map keys, and bignum handling. And it allows a nesting depth cap —
-`cbor2` raises `RecursionError` on pathological input, whereas an unbounded
-recursive Rust decoder would abort the process on stack overflow.
+duplicate map keys, and bignum handling. And it allows a lower nesting depth
+cap — `cbor2` 5.9.0 stops at 400 containers, whereas an unbounded recursive
+Rust decoder would abort the process on stack overflow well before that.
 
 ### How it is tested
 
@@ -146,9 +146,10 @@ from either suite proves nothing unless you saw the output — which is why
 
 ## Deliberate differences from the Python service
 
-These are choices, not gaps. Everything else — the pipeline order, the
-validation rules, the `{"detail": "..."}` envelope, the Title Case error
-strings, the DRF wording for request-shape errors — is reproduced exactly.
+These are choices, not gaps. The pipeline order, the validation rules, the
+`{"detail": "..."}` envelope, the Title Case error strings and the DRF wording
+for request-shape errors are reproduced exactly; everything that is *not* is
+listed here.
 
 | Area | Python | Rust | Why |
 |---|---|---|---|
@@ -158,8 +159,23 @@ strings, the DRF wording for request-shape errors — is reproduced exactly.
 | Default key/data paths | Relative to Django's `BASE_DIR` | Relative to the working directory | A binary has no `BASE_DIR`. See [sample.env](sample.env). |
 | `BIND_ADDRESS` | gunicorn `--bind` | Env var | No external process supervisor to carry it. |
 | Landing page, `/api/docs`, `/api/redoc` | Served | Not served | Frontend stays in Django. `/api/schema` is served as a static document. |
-| Nesting depth | `cbor2` fails around 500 | Hard cap at 256 | Rust would abort on stack overflow rather than raise. The deepest real transaction observed is 23. |
+| Nesting depth | `cbor2` 5.9.0 caps at 400 containers | Hard cap at 256 | Rust would abort on stack overflow rather than raise. Depths 257–400 are accepted there and refused here; the deepest real transaction observed is 23. |
 | Stray `0xff`, `f8 00`–`f8 1f` | `cbor2` accepts | Rejected | RFC 8949 says ill-formed. Diverges in the rejecting direction. |
+| Semantic CBOR tags | `cbor2` runs a per-tag decoder and 400s a bad payload anywhere in the body | Only bignum tags 2/3 are interpreted | A bogus tag parked in a body field no validator reads (2–9, 15, 17–21) is a 400 from Django and is accepted here. It cannot earn a witness Django would refuse: the ledger's decoder rejects the same body in phase 1, and stripping the field would change the signed bytes. |
+| Set de-duplication | Python `set`, so `0 == False == 0.0` collapse | Structural equality, so they stay distinct | Diverges in the rejecting direction, on input the ledger's decoder refuses anyway. |
+| Duplicate keys in the Conway redeemer map | `dict` collapses them last-wins before validation | Every entry is shape-checked | Diverges in the rejecting direction. |
+| Tag-258 set iteration order | Python `set` order, so a mixed-validity set is `PYTHONHASHSEED`-dependent | Wire order | The Python verdict is not reproducible between worker processes; this one is. |
+| `HEAD` on the read-only endpoints | 405 (DRF's `api_view` does not derive it) | 200, derived from the `GET` handler | Correct HTTP, and a health probe using `HEAD` should not be told the method is unsupported. |
+| `/metrics` and `/known_hosts/` rejection bodies | Empty `text/html` | `{"detail": ...}` JSON | Auxiliary endpoints may use endpoint-specific formats; a JSON body is friendlier and the wallet-facing envelope is unaffected. |
+| Malformed-JSON detail text | CPython `json` wording, with a character offset | `serde_json` wording | Both are `JSON parse error - <decoder message>`; the decoder is not the same one. |
+| Percent-encoded paths | Decoded before routing | Matched raw | `/pre%70rod/collateral/` is served by Django and 404s here. |
+| `known.hosts.json` in the container image | Copied in (`COPY . /app/`) | Not copied | The Docker build context is `rs/`, and the registry lives at the repo root. A container serves `{}` unless `KNOWN_HOSTS_PATH` points at a mounted file — the service logs which at startup. |
+
+Config parsing also differs in small ways that only surface with unusual values:
+comma-separated lists are whitespace-trimmed here and not by django-environ;
+`METRICS_ALLOW_IPS` is compared as parsed addresses rather than raw strings;
+`LOG_LEVEL` accepts lowercase and a few names `dictConfig` rejects; and startup
+key-validation failures log at ERROR rather than CRITICAL.
 
 ## Operations
 

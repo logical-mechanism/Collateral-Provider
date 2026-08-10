@@ -24,11 +24,13 @@
 //!   `cbor2`'s conversion to a Python `int`. Larger values become
 //!   [`Value::BigInt`], which fails every `as_u64`-style check — the same
 //!   outcome as Python's range checks.
-//! - Unlike Python, the decoder enforces [`MAX_DEPTH`]. `cbor2` raises
-//!   `RecursionError` on pathological nesting; an unbounded recursive Rust
-//!   decoder would abort the process on stack overflow instead. Exceeding the
-//!   limit is a decode error, which the validators surface as
-//!   "Invalid CBOR Data In Tx".
+//! - The decoder enforces [`MAX_DEPTH`] = 256. `cbor2` 5.9.0 has its own cap
+//!   at 400 containers (a `CBORDecodeError`, not a `RecursionError`); this one
+//!   is lower because an unbounded recursive Rust decoder would abort the
+//!   process on stack overflow rather than raise. Nesting of 257..=400 is
+//!   therefore accepted by Django and refused here; the deepest real
+//!   transaction observed is 23. Exceeding the limit is a decode error, which
+//!   the validators surface as "Invalid CBOR Data In Tx".
 //!
 //! Places where this decoder is deliberately *stricter* than `cbor2`, all of
 //! which turn an accepted-but-nonsensical value into a decode error:
@@ -37,8 +39,13 @@
 //! - `cbor2` applies semantic decoders to tags (258 becomes a `set`, 0 a
 //!   `datetime`, ...) and raises when the payload does not fit. Only the
 //!   bignum tags are interpreted here; everything else stays a
-//!   [`Value::Tag`] and is rejected by whichever validator inspects it. Same
-//!   rejection, different message.
+//!   [`Value::Tag`]. Where a validator inspects the slot that is the same
+//!   rejection with a different message, but body fields 2-9, 15 and 17-21
+//!   are never inspected, so a bogus tag parked in one of those is a 400
+//!   from Django and is accepted here. It cannot yield a witness for a
+//!   transaction Django would refuse: the ledger's own decoder rejects the
+//!   same body in phase 1, and stripping the field would change the signed
+//!   bytes. See `rs/README.md` and `tests/cbor_differential_fuzz.rs`.
 //! - A break in the value slot of an indefinite map is an error rather than a
 //!   stored break marker.
 //! - The one-byte simple-value form is rejected for arguments below 32
@@ -541,7 +548,7 @@ impl<'a> Decoder<'a> {
         if depth > MAX_DEPTH {
             // Worth a log line: legitimate Cardano transactions nest single
             // digits deep, so this only fires on a crafted payload.
-            tracing::warn!(max_depth = MAX_DEPTH, "CBOR nesting depth exceeded");
+            tracing::warn!(target: "api", max_depth = MAX_DEPTH, "CBOR nesting depth exceeded");
             return Err(CborError::DepthExceeded);
         }
         Ok(())
