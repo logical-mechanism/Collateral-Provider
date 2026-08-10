@@ -2,16 +2,16 @@
 #   pip-compile requirements.in
 # Bound to compatible-release (~=) so security patches flow in on recompile.
 
-Django~=5.2.0
-djangorestframework~=3.15
-drf-spectacular~=0.27
+Django~=6.1.0
+djangorestframework~=3.18
+drf-spectacular~=0.30
 django-cors-headers~=4.4
-django-environ~=0.11
+django-environ~=0.14
 
-cbor2~=5.6
+cbor2~=6.1
 PyNaCl~=1.5
-requests~=2.32
-prometheus-client~=0.21
+requests~=2.34
+prometheus-client~=0.26
 
-gunicorn~=23.0
+gunicorn~=26.0
 whitenoise~=6.7
