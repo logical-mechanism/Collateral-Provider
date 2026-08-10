@@ -106,7 +106,7 @@ pub fn validate_bans(value: &serde_json::Value) -> Result<(), String> {
 /// Whole lowercase-hex bytes: Python's `(?:[0-9a-f]{2})+` fullmatch.
 fn is_lower_hex_bytes(value: &str) -> bool {
     !value.is_empty()
-        && value.len() % 2 == 0
+        && value.len().is_multiple_of(2)
         && value
             .bytes()
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))

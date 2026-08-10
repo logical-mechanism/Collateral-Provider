@@ -136,7 +136,7 @@ fn chain_corpus() -> Vec<ChainCase> {
 }
 
 fn unhex(hex: &str) -> Vec<u8> {
-    assert!(hex.len() % 2 == 0, "hex must be byte aligned");
+    assert!(hex.len().is_multiple_of(2), "hex must be byte aligned");
     (0..hex.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("valid hex"))
@@ -1002,14 +1002,14 @@ fn no_sixteen_kib_input_exceeds_max_depth_without_erroring() {
     let mut rng = Rng::new(0xDEAD_BEEF_CAFE_0001);
     let mut accepted = 0usize;
     let (_, elapsed) = timed(|| {
-        for case in 0..512 {
+        for case in 0usize..512 {
             let mut buffer: Vec<u8> = (0..MAX_TX_SIZE)
                 .map(|_| alphabet[rng.below(alphabet.len())])
                 .collect();
             // Half the cases are forced to open a container so the sampler
             // actually spends its budget on the recursive path; the other half
             // are left free so the accept path is exercised too.
-            if case % 2 == 0 {
+            if case.is_multiple_of(2) {
                 buffer[0] = 0x9F;
             }
             if let Ok((value, consumed)) = cbor::decode_one(&buffer) {

@@ -121,7 +121,7 @@ fn nested_chunk() -> CborError {
 // --- hex helpers ------------------------------------------------------------
 
 fn unhex(hex: &str) -> Vec<u8> {
-    assert!(hex.len() % 2 == 0, "odd-length hex vector: {hex}");
+    assert!(hex.len().is_multiple_of(2), "odd-length hex vector: {hex}");
     (0..hex.len())
         .step_by(2)
         .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).expect("vector is hex"))
