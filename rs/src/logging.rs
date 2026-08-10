@@ -377,8 +377,21 @@ impl RotatingFile {
         }
 
         if let Some(file) = handle.file.as_mut() {
-            file.write_all(line.as_bytes())?;
-            file.write_all(b"\n")?;
+            // A failed `write_all` may already have put bytes on disk, so the
+            // counter can no longer describe the file. Drop the handle rather
+            // than advance a number that is now wrong: the next line re-opens
+            // and re-stats, where Python's `shouldRollover` calls `tell()`
+            // every time and cannot drift at all. Counting on and hoping would
+            // let `pos` fall further behind the real size with each failure
+            // until the rollover threshold stops firing and LOG_FILE grows
+            // past the cap the unit file claims to enforce.
+            let written = file
+                .write_all(line.as_bytes())
+                .and_then(|()| file.write_all(b"\n"));
+            if let Err(err) = written {
+                handle.file = None;
+                return Err(err);
+            }
         }
         handle.pos += needed;
         Ok(())

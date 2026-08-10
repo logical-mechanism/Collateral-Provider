@@ -286,10 +286,7 @@ impl Value {
     /// out a bool- or float-keyed body in phase 1 regardless.
     pub fn map_get(&self, key: i128) -> Option<&Value> {
         let entries = self.as_map()?;
-        if entries
-            .iter()
-            .any(|(entry_key, _)| aliases_integer_key(entry_key, key))
-        {
+        if self.map_key_is_ambiguous(key) {
             return None;
         }
         entries
@@ -297,6 +294,21 @@ impl Value {
             .rev()
             .find(|(entry_key, _)| entry_key.as_int() == Some(key))
             .map(|(_, value)| value)
+    }
+
+    /// Whether a Python `dict` would file some other entry of this map in the
+    /// slot for `key` — a bool or float that merely *compares* equal to it.
+    ///
+    /// [`Value::map_get`] refuses such a map by reporting the field absent.
+    /// For a required field that is a rejection and needs no help. For an
+    /// *optional* one, "absent" means "pass", so a reader of an optional field
+    /// must ask this first or it turns the refusal into silent acceptance.
+    pub fn map_key_is_ambiguous(&self, key: i128) -> bool {
+        self.as_map().is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|(entry_key, _)| aliases_integer_key(entry_key, key))
+        })
     }
 
     /// Whether an integer-keyed map entry exists. Mirrors `key in body`.

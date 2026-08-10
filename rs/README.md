@@ -156,7 +156,7 @@ listed here.
 | Throttle storage | File-based Django cache | In-process sliding window | Only needed because gunicorn runs several worker processes that must share a counter. One process does not. Removes the cache directory as a failure mode, and with it the `/healthz` cache probe. |
 | `KOIOS_MAX_IN_FLIGHT` | Per worker process | Whole process | One process replaces gunicorn's two. **Double it** to match an existing deployment's total budget. |
 | `DJANGO_SECRET_KEY` | Required | Accepted, ignored | No sessions, CSRF, or signed cookies — nothing for it to key. Kept accepted so one env file drives either implementation. |
-| Default key/data paths | Relative to Django's `BASE_DIR` | Relative to the working directory | A binary has no `BASE_DIR`. See [sample.env](sample.env). |
+| Default key/data paths | Relative to Django's `BASE_DIR` | Relative to the working directory | A binary has no `BASE_DIR`. Under systemd the working directory is `/`, so name `BANS_PATH` and `KNOWN_HOSTS_PATH` explicitly — an absent ban list is a supported configuration that logs nothing per request, and the bans would simply never take effect. The shipped unit sets both; see [sample.env](sample.env). |
 | `BIND_ADDRESS` | gunicorn `--bind` | Env var | No external process supervisor to carry it. |
 | Landing page, `/api/docs`, `/api/redoc` | Served | Not served | Frontend stays in Django. `/api/schema` is served as a static document. |
 | Nesting depth | `cbor2` 5.9.0 caps at 400 containers | Hard cap at 256 | Rust would abort on stack overflow rather than raise. Depths 257–400 are accepted there and refused here; the deepest real transaction observed is 23. |
@@ -169,6 +169,7 @@ listed here.
 | `/metrics` and `/known_hosts/` rejection bodies | Empty `text/html` | `{"detail": ...}` JSON | Auxiliary endpoints may use endpoint-specific formats; a JSON body is friendlier and the wallet-facing envelope is unaffected. |
 | Malformed-JSON detail text | CPython `json` wording, with a character offset | `serde_json` wording | Both are `JSON parse error - <decoder message>`; the decoder is not the same one. |
 | Percent-encoded paths | Decoded before routing | Matched raw | `/pre%70rod/collateral/` is served by Django and 404s here. |
+| Malformed `Content-Length` | `{"detail": "Invalid Content-Length"}` | hyper rejects the header while parsing the request, so a bare 400 with no body and no `X-Request-ID` | Not answerable above hyper. The equivalent check in `middleware/body_limit.rs` stays for any transport that does not pre-validate the header. |
 | `known.hosts.json` in the container image | Copied in (`COPY . /app/`) | Not copied | The Docker build context is `rs/`, and the registry lives at the repo root. A container serves `{}` unless `KNOWN_HOSTS_PATH` points at a mounted file — the service logs which at startup. |
 
 Config parsing also differs in small ways that only surface with unusual values:

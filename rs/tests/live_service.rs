@@ -262,6 +262,23 @@ async fn a_non_json_content_type_is_415() {
     );
 }
 
+/// Over a real socket, not just through the router: a body with no
+/// `Content-Type` at all must not reach the signing pipeline. DRF selects no
+/// parser for an empty media type and raises `UnsupportedMediaType`.
+#[tokio::test]
+async fn a_missing_content_type_is_415() {
+    let base = require_service!();
+    let response = client()
+        .post(format!("{base}/preprod/collateral/"))
+        .body(r#"{"tx":"00"}"#)
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(response.status(), 415);
+    let json: serde_json::Value = response.json().await.expect("JSON");
+    assert_eq!(detail(&json), "Unsupported media type \"\" in request.");
+}
+
 #[tokio::test]
 async fn a_chunked_body_without_content_length_is_411() {
     let base = require_service!();

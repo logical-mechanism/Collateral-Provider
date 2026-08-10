@@ -4,7 +4,7 @@
 //! are the CBOR byte-string head and are stripped.
 
 use std::collections::HashMap;
-use std::fs::{File, Metadata};
+use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -14,7 +14,7 @@ use digest::{Update, VariableOutput};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 use crate::cbor;
-use crate::data_files::FileIdentity;
+use crate::data_files::{stat_identity, FileIdentity};
 
 /// Ed25519 key material is a fixed 32 bytes; a Cardano key hash is 28.
 const KEY_LEN: usize = 32;
@@ -103,7 +103,8 @@ impl KeyCache {
         // fstat the handle we actually read, not the path: an atomic
         // replacement landing between the two would otherwise cache the new
         // file's identity against the old file's contents, and the stale key
-        // would then look fresh forever.
+        // would then look fresh forever. This is the same function
+        // `file_identity` applies above, so the two identities are comparable.
         let opened_identity =
             stat_identity(&file.metadata().map_err(|err| KeyError::io(path, err))?);
         let mut text = String::new();
@@ -338,18 +339,6 @@ pub fn blake2b(data: &[u8], digest_size: usize) -> Vec<u8> {
         return Vec::new();
     }
     out
-}
-
-/// The identity of an *already-open* file, as `data_files::file_identity`
-/// computes it for a path. Python reaches this case through
-/// `stat_identity(os.fstat(...))`; the Rust sibling only exposes the path
-/// form, so the handle form lives here. Both must stay byte-identical or a
-/// key would reload on every request.
-fn stat_identity(metadata: &Metadata) -> FileIdentity {
-    use std::os::unix::fs::MetadataExt;
-
-    let mtime_ns = i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec());
-    (mtime_ns, metadata.size(), metadata.ino())
 }
 
 #[cfg(test)]

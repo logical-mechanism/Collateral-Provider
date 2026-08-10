@@ -28,6 +28,21 @@ Environment=LOG_FORMAT=json
 # environment file if the proxy lives on another host.
 Environment=BIND_ADDRESS=127.0.0.1:8000
 
+# Operator data lives beside the environment file, and both paths have to be
+# named. systemd gives a system service a working directory of /, so the
+# defaults (./bans.json, ./known.hosts.json) would resolve to /bans.json and
+# /known.hosts.json — paths nothing creates and ProtectSystem=strict makes
+# read-only anyway. A bans file that has never existed is a supported
+# configuration that logs nothing per request, so an operator who writes a ban
+# list and restarts would get no ban and no diagnostic. The Python unit avoids
+# this by setting WorkingDirectory to the Django project root, which makes its
+# BASE_DIR-relative defaults land on real files.
+#
+# EnvironmentFile= overrides Environment= whatever the order, so an operator
+# can still move either file from the environment file.
+Environment=BANS_PATH=/etc/collateral-provider/bans.json
+Environment=KNOWN_HOSTS_PATH=/etc/collateral-provider/known.hosts.json
+
 KillSignal=SIGTERM
 KillMode=mixed
 TimeoutStartSec=30

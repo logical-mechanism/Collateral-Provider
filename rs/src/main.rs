@@ -68,6 +68,23 @@ async fn main() -> ExitCode {
         ),
     }
 
+    // Same reasoning for the ban list, which has no per-request diagnostic at
+    // all: `ReloadingJson` treats a file that has never existed as a supported
+    // configuration and stays quiet about it. An operator who writes a bans
+    // file the service is not looking at would otherwise see every banned
+    // address and IP served normally, with nothing in the log to say why.
+    let bans_path = state.config.bans_path.display().to_string();
+    match state.bans.banned_addresses().len() {
+        0 if !state.config.bans_path.exists() => tracing::warn!(
+            target: "api",
+            "No ban list at {}; bans are inactive until one exists",
+            bans_path
+        ),
+        count => {
+            tracing::info!(target: "api", "Ban list loaded: {} address(es) from {}", count, bans_path)
+        }
+    }
+
     let listener = match tokio::net::TcpListener::bind(bind_address).await {
         Ok(listener) => listener,
         Err(err) => {

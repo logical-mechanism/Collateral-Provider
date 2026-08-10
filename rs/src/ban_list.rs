@@ -13,6 +13,7 @@
 //! Address strings are the **raw output address bytes** in lowercase hex
 //! (matching what `check_outputs` compares against), not bech32.
 
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -36,9 +37,34 @@ impl BanList {
         }
     }
 
-    /// `hex_address` is lowercase hex of the raw output address bytes.
-    pub fn is_banned_address(&self, hex_address: &str) -> bool {
-        self.contains("addresses", hex_address)
+    /// One read of the banned-address list, for a caller with many candidates.
+    ///
+    /// `check_outputs` tests every output in a transaction. Asking per output
+    /// would stat the file, take the reload mutex and rescan the list once per
+    /// output — hundreds of blocking syscalls on a Tokio worker for a single
+    /// unauthenticated 16 KiB body, and every one of them serializing against
+    /// every other request that touches the list, all paid before the
+    /// admission-controlled upstream call. Read once, hash once, test in
+    /// constant time.
+    ///
+    /// Python re-reads per output because its `_BannedField` proxy is written
+    /// to look like a list at the call site, not because a mid-transaction
+    /// reload is meant to be observable: an operator edit landing between two
+    /// outputs of the same body has no defined winner either way.
+    ///
+    /// Addresses are lowercase hex of the raw output address bytes.
+    pub fn banned_addresses(&self) -> HashSet<String> {
+        self.inner
+            .get()
+            .get("addresses")
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|entry| entry.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn is_banned_ip(&self, ip: &str) -> bool {
@@ -279,8 +305,10 @@ mod tests {
         let bans = BanList::new(path.clone());
         assert!(bans.is_banned_ip("10.0.0.42"));
         assert!(!bans.is_banned_ip("10.0.0.99"));
-        assert!(bans.is_banned_address(&("70".to_string() + &"ab".repeat(28))));
-        assert!(!bans.is_banned_address(&"cd".repeat(29)));
+        assert!(bans
+            .banned_addresses()
+            .contains(&("70".to_string() + &"ab".repeat(28))));
+        assert!(!bans.banned_addresses().contains(&"cd".repeat(29)));
 
         // An invalid operator update keeps the last good document live.
         let later = std::fs::metadata(&path)
@@ -303,7 +331,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let bans = BanList::new(dir.path().join("absent.json"));
         assert!(!bans.is_banned_ip("10.0.0.42"));
-        assert!(!bans.is_banned_address(&"ab".repeat(29)));
+        assert!(bans.banned_addresses().is_empty());
     }
 
     #[test]

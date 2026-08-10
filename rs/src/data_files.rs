@@ -30,7 +30,12 @@ pub fn file_identity(path: &Path) -> std::io::Result<FileIdentity> {
 /// Never compare timestamps for "newer": an atomic replacement may carry an
 /// equal or older mtime and still be a different document. Only equality of
 /// the whole triple means "same contents as last read".
-fn stat_identity(metadata: &std::fs::Metadata) -> FileIdentity {
+///
+/// Exposed to the crate because [`signature`](crate::signature) fstats the key
+/// handle it actually read rather than the path, and the two identities are
+/// compared against each other — computing them differently would make every
+/// signing request reload the key.
+pub(crate) fn stat_identity(metadata: &std::fs::Metadata) -> FileIdentity {
     use std::os::unix::fs::MetadataExt;
 
     let mtime_ns = i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec());

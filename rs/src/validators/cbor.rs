@@ -129,6 +129,8 @@ pub fn check_outputs(body: &Value, bans: &BanList) -> ApiResult<()> {
     let Some(outputs) = field.as_array() else {
         return Err(ApiError::validation("Outputs Are Not A List"));
     };
+    // One read of the ban list for the whole body; see `BanList::banned_addresses`.
+    let banned = bans.banned_addresses();
 
     for utxo in outputs {
         if !matches!(utxo, Value::Array(_) | Value::Map(_)) {
@@ -143,11 +145,16 @@ pub fn check_outputs(body: &Value, bans: &BanList) -> ApiResult<()> {
         let Some(address) = address.as_bytes() else {
             return Err(ApiError::validation("TxId Is Not Bytes"));
         };
-        let address = hex::encode(address);
-        if bans.is_banned_address(&address) {
-            return Err(ApiError::validation(format!(
-                "The Address: {address} Is Banned"
-            )));
+        // Only hex-encode when there is something to compare against: an
+        // empty ban list is the normal case and a 16 KiB body can hold
+        // hundreds of outputs.
+        if !banned.is_empty() {
+            let address = hex::encode(address);
+            if banned.contains(&address) {
+                return Err(ApiError::validation(format!(
+                    "The Address: {address} Is Banned"
+                )));
+            }
         }
     }
     Ok(())
@@ -193,6 +200,18 @@ pub fn check_collateral(body: &Value, env_config: &EnvironmentConfig) -> ApiResu
 /// nibble of the header selects the address type; even types carry a key-hash
 /// payment credential, odd types a script hash.
 pub fn check_collateral_return(body: &Value, pkh: &str) -> ApiResult<()> {
+    // The one optional field in this module, and so the one place where
+    // `map_get` returning `None` must not be read as "fine". A body carrying
+    // both `16` and `16.0` is a map `map_get` refuses to read, and Python's
+    // dict merges the two into one slot and validates whichever landed last —
+    // so treating the refusal as absence would sign a transaction whose
+    // collateral return was never checked against our own key hash. Refuse it
+    // for the same reason the required fields do.
+    if body.map_key_is_ambiguous(COLLATERAL_RETURN) {
+        return Err(ApiError::validation(
+            "Collateral Return Is Ambiguously Keyed",
+        ));
+    }
     let Some(utxo) = body.map_get(COLLATERAL_RETURN) else {
         return Ok(());
     };
@@ -864,6 +883,44 @@ mod tests {
     #[test]
     fn an_absent_collateral_return_is_allowed() {
         assert!(check_collateral_return(&body(&[]), PKH).is_ok());
+    }
+
+    /// The optional-field counterpart to
+    /// `an_aliased_collateral_field_is_refused_rather_than_guessed`.
+    ///
+    /// `map_get` refuses a map whose keys a Python `dict` would merge by
+    /// reporting the field absent. For field 16 absent means "nothing to
+    /// check", so the refusal has to be caught before it becomes a pass —
+    /// otherwise a body pairing a float `16.0` with a real `16` naming the
+    /// attacker's address is signed with the return destination unexamined,
+    /// while Django validates the merged entry and rejects it.
+    #[test]
+    fn an_aliased_collateral_return_is_refused_rather_than_skipped() {
+        let attacker = Value::Array(vec![
+            Value::Bytes(unhex(&format!("60{}", "aa".repeat(28)))),
+            Value::Int(1_000_000),
+        ]);
+        for entries in [
+            vec![
+                (Value::Int(COLLATERAL_RETURN), attacker.clone()),
+                (Value::Float(16.0), Value::Int(0)),
+            ],
+            vec![
+                (Value::Float(16.0), Value::Int(0)),
+                (Value::Int(COLLATERAL_RETURN), attacker.clone()),
+            ],
+            // The float entry alone: `16 in body` is true for Python, so the
+            // field is not absent there either.
+            vec![(Value::Float(16.0), attacker)],
+        ] {
+            assert_eq!(
+                detail(check_collateral_return(&Value::Map(entries), PKH)),
+                "Collateral Return Is Ambiguously Keyed"
+            );
+        }
+        // A key that cannot alias 16 leaves the field genuinely absent.
+        let unaliased = Value::Map(vec![(Value::Bool(true), Value::Int(0))]);
+        assert!(check_collateral_return(&unaliased, PKH).is_ok());
     }
 
     #[test]

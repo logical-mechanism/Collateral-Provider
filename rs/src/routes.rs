@@ -108,8 +108,23 @@ pub fn app(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// The static OpenAPI document served at `/api/schema`.
-pub const OPENAPI_JSON: &str = include_str!("openapi.json");
+/// The OpenAPI document served at `/api/schema`, with `info.version` taken
+/// from the crate version rather than from the file.
+///
+/// Django reads `SPECTACULAR_SETTINGS['VERSION']` straight off `API_VERSION`,
+/// so its schema cannot disagree with what `/healthz` reports. A checked-in
+/// literal would be a third copy of a value the release process bumps in one
+/// place, and the drift is silent — the schema is exactly the thing an
+/// integrator trusts to tell them which version they are talking to.
+///
+/// `serde_json`'s `preserve_order` feature is on, so the round trip leaves the
+/// document's key order — and its readability as a checked-in file — intact.
+pub static OPENAPI_JSON: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let mut document: JsonValue =
+        serde_json::from_str(include_str!("openapi.json")).expect("openapi.json is valid JSON");
+    document["info"]["version"] = JsonValue::String(VERSION.to_string());
+    document.to_string()
+});
 
 // --- cross-cutting response shaping ------------------------------------------
 
@@ -184,10 +199,7 @@ async fn cors(request: Request, next: Next) -> Response {
     };
 
     let headers = response.headers_mut();
-    // Always varies on origin, even when no origin was sent: the response would
-    // have carried `Access-Control-Allow-Origin` had one been, so a cache must
-    // not serve this copy to a cross-origin request.
-    headers.insert(header::VARY, HeaderValue::from_static("origin"));
+    patch_vary_origin(headers);
     if origin.is_some() {
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_ORIGIN,
@@ -195,6 +207,34 @@ async fn cors(request: Request, next: Next) -> Response {
         );
     }
     response
+}
+
+/// `django.utils.cache.patch_vary_headers(response, ("origin",))`, narrowed to
+/// the one field name this service adds.
+///
+/// django-cors-headers calls it before it so much as looks at the `Origin`
+/// header, so the response varies on origin whether or not one was sent: it
+/// would have carried `Access-Control-Allow-Origin` had one been, and a cache
+/// must not serve this copy to a cross-origin request.
+///
+/// It *merges*, and so does this. Overwriting would silently drop a `Vary` set
+/// further in — nothing sets one today, but a later content-negotiating or
+/// compressing layer would lose its own with no test failing. Appending a
+/// second field line rather than rewriting the first is equivalent under
+/// RFC 9110 and cannot lose a value this function could not decode.
+fn patch_vary_origin(headers: &mut HeaderMap) {
+    let already_varies = headers.get_all(header::VARY).iter().any(|value| {
+        value.to_str().is_ok_and(|value| {
+            value.split(',').any(|field| {
+                let field = field.trim();
+                // Django leaves a wildcard alone: it already varies on this.
+                field == "*" || field.eq_ignore_ascii_case("origin")
+            })
+        })
+    });
+    if !already_varies {
+        headers.append(header::VARY, HeaderValue::from_static("origin"));
+    }
 }
 
 // --- collateral --------------------------------------------------------------
@@ -262,14 +302,15 @@ async fn collateral(
         return detail_response(StatusCode::BAD_REQUEST, "Invalid Environment");
     };
 
-    if !is_json_content_type(request.headers()) {
+    let content_type = raw_content_type(request.headers());
+    if has_request_stream(request.headers()) && !is_json_content_type(content_type.as_deref()) {
         // DRF names the media type it refused; a bare "Unsupported Media Type"
         // leaves the caller guessing which header was wrong.
         return detail_response(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             &format!(
                 "Unsupported media type \"{}\" in request.",
-                raw_content_type(request.headers()).unwrap_or_default()
+                content_type.unwrap_or_default()
             ),
         );
     }
@@ -456,32 +497,61 @@ fn throttled_response(retry_after: u64) -> Response {
 }
 
 /// The raw `Content-Type` header, as DRF's `request.content_type` sees it.
-fn raw_content_type(headers: &HeaderMap) -> Option<&str> {
+///
+/// WSGI hands Django an environ whose values are already latin-1 text
+/// (PEP 3333), so `request.content_type` is never "present but unreadable":
+/// every byte maps to exactly one character. Decoding the same way keeps a
+/// header that is not valid UTF-8 a media type we compare against — rather
+/// than one that silently reads as absent — and keeps the string DRF echoes
+/// in its 415 byte-for-byte the same.
+///
+/// An absent header is `None` here and `''` in Django, which is why the 415
+/// message falls back to the empty string.
+fn raw_content_type(headers: &HeaderMap) -> Option<String> {
     headers
         .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
+        .map(|value| value.as_bytes().iter().map(|&byte| byte as char).collect())
 }
 
 /// Parser negotiation, not renderer negotiation: a form-encoded or multipart
 /// body gets the documented 415 rather than being silently accepted.
 ///
 /// DRF selects a parser whose media type *matches* the request's, and wildcards
-/// match on either side. So `application/json`, `application/*` and `*/*` all
-/// reach `JSONParser`, and a request with no `Content-Type` at all falls
-/// through to the default parser rather than being refused.
-fn is_json_content_type(headers: &HeaderMap) -> bool {
-    let Some(raw) = raw_content_type(headers) else {
-        return true;
-    };
-    let media_type = raw.split(';').next().unwrap_or(raw).trim();
-    if media_type.is_empty() {
-        return true;
-    }
+/// match on either side, so `application/json`, `application/*` and `*/*` all
+/// reach `JSONParser`. An absent, empty or whitespace-only header does **not**:
+/// `_MediaType('')` has an empty main and sub type, `media_type_matches` finds
+/// no parser willing to claim it, and `Request._parse` raises
+/// `UnsupportedMediaType`. Returning true for those was the port signing
+/// transactions Django answers 415 to.
+fn is_json_content_type(raw: Option<&str>) -> bool {
+    // Django parses the header with `parse_header_parameters`, which strips
+    // the media type before lowercasing it, so " ; charset=x" is empty too.
+    let media_type = raw
+        .map(|raw| raw.split(';').next().unwrap_or(raw).trim())
+        .unwrap_or_default();
     let Some((main, sub)) = media_type.split_once('/') else {
         return false;
     };
     (main == "*" || main.eq_ignore_ascii_case("application"))
         && (sub == "*" || sub.eq_ignore_ascii_case("json"))
+}
+
+/// Whether DRF would have a stream to parse, and so a media type to negotiate.
+///
+/// `Request._load_stream` sets the stream to `None` when `CONTENT_LENGTH` is
+/// zero or unparseable, and `Request._parse` then returns empty data *before*
+/// selecting a parser. A zero-length body therefore reaches the serializer and
+/// is answered "Missing required field: 'tx'" whatever the media type says —
+/// checking the header first would answer 415 where Django answers 400.
+///
+/// `body_limit` has already refused a missing or malformed `Content-Length` on
+/// this route, so in practice only the genuine zero survives to here.
+fn has_request_stream(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u128>().ok())
+        .is_some_and(|length| length != 0)
 }
 
 /// One place decides who the caller is, so bans, metrics authorization, and
@@ -569,7 +639,11 @@ async fn metrics(State(state): State<AppState>, request: Request) -> Response {
 }
 
 async fn schema() -> Response {
-    ([(header::CONTENT_TYPE, "application/json")], OPENAPI_JSON).into_response()
+    (
+        [(header::CONTENT_TYPE, "application/json")],
+        OPENAPI_JSON.as_str(),
+    )
+        .into_response()
 }
 
 async fn not_found() -> Response {
@@ -812,27 +886,70 @@ mod tests {
         );
     }
 
+    /// Each verdict below was taken from this repo's Django stack, driving
+    /// `/preprod/collateral/` through `django.test.Client.generic` with the
+    /// media type under test.
     #[test]
     fn content_type_accepts_parameters_but_not_other_media_types() {
-        let with = |value: &str| {
-            let mut headers = HeaderMap::new();
-            headers.insert(header::CONTENT_TYPE, HeaderValue::from_str(value).unwrap());
-            is_json_content_type(&headers)
-        };
+        let with = |value: &str| is_json_content_type(Some(value));
         assert!(with("application/json"));
         assert!(with("application/json; charset=utf-8"));
         assert!(with("Application/JSON"));
-        // DRF matches parsers on wildcards from either side, and falls through
-        // to the default parser when the header is absent or empty.
+        // DRF matches parsers on wildcards from either side.
         assert!(with("application/*"));
         assert!(with("*/*"));
-        assert!(with(""));
-        assert!(is_json_content_type(&HeaderMap::new()));
+        assert!(with("*/json"));
         assert!(!with("text/plain"));
         assert!(!with("text/json"));
         assert!(!with("application/xml"));
         assert!(!with("application/x-www-form-urlencoded"));
+        // No slash, no media type: `_MediaType('json')` has an empty sub type.
         assert!(!with("json"));
+        assert!(!with("application"));
+        assert!(!with("application/"));
+        assert!(!with("/json"));
+        // The cases the port used to accept and sign. DRF finds no parser
+        // willing to claim an empty media type and answers 415.
+        assert!(!with(""));
+        assert!(!with("  "));
+        assert!(!with("; charset=utf-8"));
+        assert!(!is_json_content_type(None));
+    }
+
+    /// A `Content-Type` that is not valid UTF-8 must still be *a* media type,
+    /// not an absent one: Django reads the environ as latin-1, so it compares
+    /// against a real string and echoes that string back in the 415.
+    #[test]
+    fn a_non_utf8_content_type_is_decoded_rather_than_dropped() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_bytes(b"application/json\x80").expect("header value"),
+        );
+        let raw = raw_content_type(&headers).expect("header is present");
+        assert_eq!(raw, "application/json\u{80}");
+        assert!(!is_json_content_type(Some(&raw)));
+        assert_eq!(raw_content_type(&HeaderMap::new()), None);
+    }
+
+    /// DRF negotiates a parser only when there is a stream to parse.
+    #[test]
+    fn a_zero_length_body_skips_parser_negotiation() {
+        let with = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_LENGTH,
+                HeaderValue::from_str(value).unwrap(),
+            );
+            has_request_stream(&headers)
+        };
+        assert!(!with("0"));
+        assert!(with("1"));
+        assert!(with("16384"));
+        // Unparseable or absent is `content_length = 0` in `_load_stream`.
+        assert!(!with("abc"));
+        assert!(!with(""));
+        assert!(!has_request_stream(&HeaderMap::new()));
     }
 
     #[test]
@@ -1188,6 +1305,45 @@ mod tests {
         let document = body_json(response).await;
         assert_eq!(document["openapi"], json!("3.0.3"));
         assert!(document["paths"]["/{environment}/collateral/"].is_object());
+        // The schema must name the same version /healthz and /livez do.
+        assert_eq!(document["info"]["version"], json!(VERSION));
+    }
+
+    #[test]
+    fn vary_origin_merges_rather_than_overwrites() {
+        let mut headers = HeaderMap::new();
+        patch_vary_origin(&mut headers);
+        assert_eq!(
+            headers.get_all(header::VARY).iter().collect::<Vec<_>>(),
+            vec!["origin"]
+        );
+
+        // Idempotent, and case-insensitive about what is already there.
+        patch_vary_origin(&mut headers);
+        headers.insert(header::VARY, HeaderValue::from_static("Origin"));
+        patch_vary_origin(&mut headers);
+        assert_eq!(
+            headers.get_all(header::VARY).iter().collect::<Vec<_>>(),
+            vec!["Origin"]
+        );
+
+        // Someone else's Vary survives.
+        let mut headers = HeaderMap::new();
+        headers.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
+        patch_vary_origin(&mut headers);
+        assert_eq!(
+            headers.get_all(header::VARY).iter().collect::<Vec<_>>(),
+            vec!["accept-encoding", "origin"]
+        );
+
+        // A wildcard already varies on everything.
+        let mut headers = HeaderMap::new();
+        headers.insert(header::VARY, HeaderValue::from_static("*"));
+        patch_vary_origin(&mut headers);
+        assert_eq!(
+            headers.get_all(header::VARY).iter().collect::<Vec<_>>(),
+            vec!["*"]
+        );
     }
 
     #[tokio::test]
@@ -1247,6 +1403,66 @@ mod tests {
             body_json(response).await,
             json!({"detail": "Unsupported media type \"text/plain\" in request."})
         );
+    }
+
+    /// A body with no `Content-Type` at all must not be signed. DRF selects no
+    /// parser for an empty media type, so Django answers 415 here; the port
+    /// used to parse the body as JSON and run the whole validation pipeline.
+    #[tokio::test]
+    async fn a_missing_content_type_is_415_rather_than_parsed_as_json() {
+        for header_value in [None, Some(""), Some("  ")] {
+            let mut builder = Request::builder()
+                .method("POST")
+                .uri("/preprod/collateral/")
+                .header(header::HOST, "127.0.0.1")
+                .header(header::CONTENT_LENGTH, "11");
+            if let Some(value) = header_value {
+                builder = builder.header(header::CONTENT_TYPE, value);
+            }
+            let request = builder
+                .body(Body::from(r#"{"tx":"00"}"#))
+                .expect("request builds");
+            let response = send(router(), request).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "{header_value:?}"
+            );
+            assert_eq!(
+                body_json(response).await,
+                json!({
+                    "detail": format!(
+                        "Unsupported media type \"{}\" in request.",
+                        header_value.unwrap_or_default()
+                    )
+                }),
+                "{header_value:?}"
+            );
+        }
+    }
+
+    /// The other direction: with nothing to parse, DRF never consults the
+    /// media type, so even `text/plain` reaches the serializer and hears about
+    /// the missing field rather than about its own header.
+    #[tokio::test]
+    async fn a_zero_length_body_is_a_serializer_error_whatever_the_media_type() {
+        for content_type in ["text/plain", "application/json"] {
+            let request = Request::builder()
+                .method("POST")
+                .uri("/preprod/collateral/")
+                .header(header::HOST, "127.0.0.1")
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CONTENT_LENGTH, "0")
+                .body(Body::empty())
+                .expect("request builds");
+            let response = send(router(), request).await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{content_type}");
+            assert_eq!(
+                body_json(response).await,
+                json!({"detail": "Missing required field: 'tx'"}),
+                "{content_type}"
+            );
+        }
     }
 
     #[tokio::test]
