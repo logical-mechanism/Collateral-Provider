@@ -24,7 +24,6 @@ path = "src/main.rs"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "matched-path", "original-uri"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "fs"] }
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["cors", "catch-panic"] }
 http-body-util = "0.1"
 bytes = "1"
 
