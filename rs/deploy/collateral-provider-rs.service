@@ -1,0 +1,84 @@
+[Unit]
+Description=Collateral Provider API (Rust)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=collateral-provider
+Group=collateral-provider
+
+# One binary and one environment file. There is no virtualenv, no WSGI
+# server, and no writable cache directory to provision: the throttle window
+# lives in process memory, so unlike the Python unit nothing here needs
+# CacheDirectory or a CACHE_DIR override.
+ExecStart=/usr/local/bin/collateral-provider
+EnvironmentFile=/etc/collateral-provider/environment
+
+# Logging to journald. The default is a rotated file inside the working
+# directory, which ProtectSystem=strict makes unwritable — and unlike the
+# Python service, which fails at import, this one refuses to start with a
+# clear error. Either way, journald is the right answer under systemd.
+Environment=LOG_TO_CONSOLE=True
+Environment=LOG_FORMAT=json
+
+# Bind to loopback and let the reverse proxy terminate TLS. Override in the
+# environment file if the proxy lives on another host.
+Environment=BIND_ADDRESS=127.0.0.1:8000
+
+# Operator data lives beside the environment file, and both paths have to be
+# named. systemd gives a system service a working directory of /, so the
+# defaults (./bans.json, ./known.hosts.json) would resolve to /bans.json and
+# /known.hosts.json — paths nothing creates and ProtectSystem=strict makes
+# read-only anyway. A bans file that has never existed is a supported
+# configuration that logs nothing per request, so an operator who writes a ban
+# list and restarts would get no ban and no diagnostic. The Python unit avoids
+# this by setting WorkingDirectory to the Django project root, which makes its
+# BASE_DIR-relative defaults land on real files.
+#
+# EnvironmentFile= overrides Environment= whatever the order, so an operator
+# can still move either file from the environment file.
+Environment=BANS_PATH=/etc/collateral-provider/bans.json
+Environment=KNOWN_HOSTS_PATH=/etc/collateral-provider/known.hosts.json
+
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStartSec=30
+# The binary drains in-flight signing requests on SIGTERM. Allow longer than
+# the upstream evaluation timeout so a request in flight to Koios finishes
+# rather than being cut off mid-witness.
+TimeoutStopSec=35
+Restart=on-failure
+RestartSec=5
+UMask=0027
+
+# Outbound DNS/TCP to reach the evaluator, read-only access to the binary and
+# the key files, and no write access anywhere.
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+ProtectSystem=strict
+ProcSubset=pid
+ReadOnlyPaths=/usr/local/bin/collateral-provider /etc/collateral-provider
+RemoveIPC=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

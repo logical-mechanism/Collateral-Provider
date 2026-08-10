@@ -14,6 +14,50 @@ HTTP contract:
   response field that existing clients can ignore.
 - **PATCH** for bug fixes that don't change the contract.
 
+## [Unreleased]
+
+### Added
+
+- **A Rust port of the API in [`rs/`](rs/)**, for operators who would rather
+  deploy one static binary than gunicorn plus a Python runtime. No change to
+  the HTTP contract: the pipeline order, validation rules,
+  `{"detail": "..."}` envelope and Title Case error strings are reproduced
+  exactly, both implementations read the same environment variables and the
+  same `known.hosts.json`, and `/healthz` reports the same version. A client
+  cannot tell them apart.
+
+  Django remains the reference implementation and keeps the frontend — the
+  landing page, `/api/docs` and `/api/redoc` are not served by the binary.
+  Merging this does not change what production runs; the platform builds the
+  root `Dockerfile`, which is untouched.
+
+  Operators moving a deployment across should read the differences table in
+  [rs/README.md](rs/README.md) and the new section in
+  [SECURITY.md](SECURITY.md). The two that need action rather than
+  acknowledgement: `KOIOS_MAX_IN_FLIGHT` becomes a whole-process budget rather
+  than per gunicorn worker (double it), and the per-IP throttle moves into
+  process memory, so scaling to more than one instance multiplies the
+  effective rate where the shared file cache did not.
+
+  Rust has no `cbor2`, so the port carries its own CBOR codec with exact
+  byte-span tracking — `tx_id` hashes the body's exact wire slice and
+  `script_integrity` slices witness fields 4 and 5 verbatim, neither of which
+  survives a re-serialization. It is tested against 162 real transactions
+  spanning Byron through Conway, each checked against the hash the chain
+  itself assigned, plus the RFC 8949 vectors, a ~267,000-input differential
+  fuzz against `cbor2`, and adversarial robustness sweeps.
+
+- **`cargo audit` on every `rs/` CI run** and weekly Dependabot coverage of
+  the `cargo` ecosystem, matching what `pip-audit` and the `pip` ecosystem
+  already do for the Python service.
+
+### Fixed
+
+- **The root `.dockerignore` now excludes `rs/`.** The Python production image
+  copies the whole repository, so without this the Rust sources — and on any
+  machine that has run `cargo build`, a multi-gigabyte `target/` directory —
+  entered its build context.
+
 ## [1.3.0] — 2026-08-08
 
 ### Added

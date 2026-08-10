@@ -1,0 +1,153 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "rs/**"
+      - ".github/workflows/rust-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "rs/**"
+      - ".github/workflows/rust-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: rs
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version && cargo --version
+
+      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2
+        with:
+          workspaces: rs
+
+      - name: Format
+        run: cargo fmt --check
+
+      # --locked so a dependency cannot float underneath a signing service
+      # without the lockfile change showing up in review.
+      - name: Build
+        run: cargo build --all-targets --locked
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      # Runs the CBOR conformance, chain-corpus, differential and robustness
+      # suites. No network and no Python: tests/live_upstream.rs skips itself
+      # unless COLLATERAL_LIVE_UPSTREAM is set.
+      - name: Test
+        run: cargo test --all-targets --locked
+
+      # The Python side runs pip-audit on every CI run; this is the analogue.
+      # A signing service should not learn about a dependency advisory from a
+      # weekly Dependabot PR alone.
+      - name: Audit dependencies
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: rs
+
+      - name: Release build
+        run: cargo build --release --locked
+
+      # Real keys are local-only and never enter this repo — the development
+      # pair under collateral_provider/api/key/ is gitignored, so a checkout
+      # has none. Materialize the same deterministic dummy identity the Python
+      # workflow uses: a zero seed, its real derived public key, and the PKH
+      # those two hash to. Obviously unusable for anything real, while still
+      # exercising the startup consistency check and /healthz for real.
+      - name: Create dummy signing keys
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/keys
+          ZEROS="0000000000000000000000000000000000000000000000000000000000000000"
+          VKEY="3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
+          printf '{"type":"PaymentSigningKeyShelley_ed25519","description":"CI dummy — not real","cborHex":"5820%s"}' "$ZEROS" > /tmp/keys/payment.skey
+          printf '{"type":"PaymentVerificationKeyShelley_ed25519","description":"CI dummy — not real","cborHex":"5820%s"}' "$VKEY" > /tmp/keys/payment.vkey
+
+      # A green unit suite does not prove the binary boots. Start it and
+      # require a real 200 from /healthz, which revalidates the signing
+      # identity cryptographically.
+      - name: Smoke test the binary
+        run: |
+          set -euo pipefail
+          # blake2b-224 of the dummy verification key above, asserted rather
+          # than derived so a wrong pair fails here instead of booting anyway.
+          export PKH=cb9358529df4729c3246a2a033cb9821abbfd16de4888005904abc41
+          export ENVIRONMENT=development
+          export SKEY_PATH=/tmp/keys/payment.skey
+          export VKEY_PATH=/tmp/keys/payment.vkey
+          export KNOWN_HOSTS_PATH="$PWD/../known.hosts.json"
+          export PREPROD_TXID=$(printf '0%.0s' $(seq 64))
+          export PREPROD_TXIDX=0
+          export PREPROD_NETWORK="--testnet-magic 1"
+          export MAINNET_TXID=$(printf '0%.0s' $(seq 64))
+          export MAINNET_TXIDX=0
+          export MAINNET_NETWORK="--mainnet"
+          export BIND_ADDRESS=127.0.0.1:8099
+          export LOG_TO_CONSOLE=True LOG_FORMAT=json LOG_LEVEL=INFO
+
+          ./target/release/collateral-provider > /tmp/smoke.log 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 100); do
+            if curl -sf -o /dev/null http://127.0.0.1:8099/livez; then break; fi
+            sleep 0.1
+          done
+
+          # The real assertions live in tests/live_service.rs, which drives the
+          # assembled binary over HTTP: health, the request-shape wording, the
+          # error envelope, the 411/413/415 paths. None of them reach an
+          # upstream — the corpus transaction it posts is refused by a local
+          # check — so this stays network-free and deterministic.
+          #
+          # --nocapture because a skipped run still reports ok; without it a
+          # green line would not prove the suite found a server.
+          COLLATERAL_BASE_URL=http://127.0.0.1:8099 \
+            cargo test --locked --test live_service -- --nocapture 2>&1 | tee /tmp/live.log
+          # Fail loudly if the suite skipped itself rather than running.
+          if grep -q "^skipped: no collateral provider listening" /tmp/live.log; then
+            echo "live_service could not reach the server it was pointed at" >&2
+            cat /tmp/smoke.log >&2
+            exit 1
+          fi
+
+          # SIGTERM must drain rather than be ignored.
+          kill -TERM "$server"
+          for _ in $(seq 1 50); do
+            kill -0 "$server" 2>/dev/null || break
+            sleep 0.1
+          done
+          if kill -0 "$server" 2>/dev/null; then
+            echo "server did not exit on SIGTERM" >&2
+            cat /tmp/smoke.log >&2
+            exit 1
+          fi
+          grep -q "Collateral provider stopped" /tmp/smoke.log
+
+      - name: Verify the container image builds
+        run: docker build -t collateral-provider-rs .

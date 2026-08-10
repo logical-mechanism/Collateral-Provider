@@ -6,6 +6,15 @@ Notes for Claude Code working in this repo. Keep this terse and current — upda
 
 A Django + DRF service that takes a Cardano transaction CBOR from a user, validates it satisfies the rules for using a shared collateral UTxO, and returns a witness (signature) for that transaction. One key, one collateral UTxO per network, shared across many users so they don't have to set up collateral in their own wallet.
 
+There is also a **Rust port of the API in [rs/](rs/)** — same wire contract,
+same validation pipeline, same error strings, for operators who want a single
+static binary. Django remains the reference implementation and owns the
+frontend (landing page, `/api/docs`, `/api/redoc`); the Rust binary serves the
+API only. **A behaviour change to the Python validators or error strings must
+be mirrored in `rs/` or the two implementations diverge.** Module names line up
+one-to-one so the pair can be diffed; the deliberate differences and the
+testing strategy are in [rs/README.md](rs/README.md).
+
 The whole product is one main endpoint plus operational extras:
 
 ```
@@ -49,7 +58,9 @@ GET  /api/{schema,docs,redoc}/                                          -> OpenA
 - [Dockerfile](Dockerfile) / [docker-entrypoint.sh](docker-entrypoint.sh) — what actually ships: the image App Platform builds, and the entrypoint that materializes signing keys from `SKEY_CONTENTS` / `VKEY_CONTENTS`
 - [.do/app.yaml](.do/app.yaml) — App Platform bootstrap template (NOT the live spec; see Deployment below)
 - [deploy/](deploy/) — self-hosting only: systemd unit, nginx template, sudoers, SSH forced command
+- [rs/](rs/) — the Rust port of the API. Own `Cargo.toml`, `Dockerfile`, `sample.env` and [README](rs/README.md). Modules mirror `collateral_provider/api/` one-to-one. Its CBOR codec is hand-rolled (`rs/src/cbor.rs`) because `tx_id` and `script_integrity` need exact byte spans; `rs/tests/fixtures/` holds a 162-transaction real-chain corpus keyed by chain-assigned hash.
 - [.github/workflows/ci.yml](.github/workflows/ci.yml) — CI: ruff, tests, coverage, OpenAPI validate, pip-audit
+- [.github/workflows/rust-ci.yml](.github/workflows/rust-ci.yml) — Rust CI: fmt, clippy `-D warnings`, tests, release build, a boot/`healthz`/SIGTERM smoke test, and a container build. Path-filtered to `rs/`.
 - [pyproject.toml](pyproject.toml) — ruff and coverage config
 - [requirements.in](requirements.in) / [requirements-dev.in](requirements-dev.in) — direct deps; `*.txt` files are pip-compile lockfiles
 - [SECURITY.md](SECURITY.md) — vuln reporting policy and operator hardening checklist

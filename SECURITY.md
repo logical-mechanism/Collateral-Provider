@@ -156,6 +156,42 @@ If you're running this service:
       Under systemd or a container runtime, configure journal/runtime retention
       and access controls. In file mode, restrict `LOG_FILE` to the service user.
 
+### The Rust implementation (`rs/`)
+
+Everything above applies unchanged. The two implementations serve the same
+contract, run the same validation pipeline, and share the same threat model —
+in particular the dedicated-key invariant and the hard-fork UTxO rotation
+below are properties of the *protocol*, not of the language, and hold for
+either.
+
+Differences an operator has to act on rather than merely notice:
+
+- [ ] `KOIOS_MAX_IN_FLIGHT` is a **whole-process** budget, not per worker.
+      The Python service runs two gunicorn workers, so a value carried over
+      unchanged halves the aggregate upstream budget. Double it when
+      migrating.
+- [ ] The per-IP throttle lives in process memory instead of a shared file
+      cache. That removes the cache directory as a failure mode, and with it
+      the `/healthz` cache probe — but it also means the rate limit is
+      per-process. Running more than one instance behind a load balancer
+      multiplies the effective rate by the instance count; the Python
+      file-cache did not. Enforce the limit at the proxy if you scale out.
+- [ ] `DJANGO_SECRET_KEY` is accepted and ignored — there are no sessions,
+      CSRF tokens, or signed cookies for it to key. The checklist item
+      requiring a real random value does not apply.
+- [ ] The binary serves no HTML and no static assets, so a reverse-proxy
+      config carried over from the Python deployment should drop its static
+      file handling. `/api/docs` and `/api/redoc` do not exist; `/api/schema`
+      is a static document.
+- [ ] Key paths default relative to the working directory rather than a
+      Django `BASE_DIR`. Set `SKEY_PATH` / `VKEY_PATH` explicitly rather than
+      relying on a default, which is good practice regardless.
+
+Supply chain: `Cargo.lock` is committed and CI builds `--locked`, so a
+dependency cannot change underneath the signing path without a reviewable
+lockfile diff. `cargo audit` runs on every `rs/` CI run and Dependabot watches
+the `cargo` ecosystem weekly.
+
 ### Self-hosted Ubuntu/systemd deploys
 
 The single-host self-hosting path is documented in

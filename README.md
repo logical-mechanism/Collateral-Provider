@@ -142,6 +142,34 @@ client's `Accept` header — the endpoint always renders JSON. Field names from
 internal serializers are not leaked. Auxiliary HTML and observability
 endpoints have their own response formats.
 
+## Two implementations
+
+The service ships in two forms that speak the same wire contract:
+
+- **Python (Django + DRF)** — `collateral_provider/`. The reference
+  implementation and the frontend: landing page, `/api/docs`, `/api/redoc`.
+- **Rust (axum)** — [`rs/`](rs/). An API-only port for operators who would
+  rather deploy one static binary than gunicorn plus a Python runtime.
+
+```bash
+cd rs && cargo build --release && ./target/release/collateral-provider
+```
+
+Both read the same environment variables and the same `known.hosts.json`, so
+one configuration drives either, and the two can run side by side. The Rust
+port reproduces the pipeline order, the validation rules, the
+`{"detail": "..."}` envelope, and the error strings exactly; its handful of
+deliberate differences — an in-process throttle instead of a shared file
+cache, `KOIOS_MAX_IN_FLIGHT` as a whole-process budget rather than per worker,
+and no HTML surface — are tabulated in [rs/README.md](rs/README.md).
+
+Because Rust has no `cbor2`, the port carries its own CBOR codec with exact
+byte-span tracking, which the signing path depends on. It is tested against
+162 real transactions spanning Byron through Conway, each checked against the
+hash the chain itself assigned, plus the RFC 8949 vectors, a ~267,000-input
+differential fuzz against `cbor2`, and adversarial robustness sweeps. See
+[rs/README.md](rs/README.md#how-it-is-tested).
+
 ## Setup
 
 ```bash
