@@ -14,6 +14,26 @@ cp sample.env .env      # then fill in PKH, key paths, txids
 That is the whole deployment story: no WSGI server, no worker/thread tuning,
 no static-file collection, no file-based cache directory.
 
+Configuration is environment-first — there is no flag for any setting, so the
+binary and `settings.py` cannot drift into two ways of saying the same thing.
+The only flags are:
+
+```
+--env-file <PATH>   Load this file before starting. Without it, a .env is
+                    looked for in the working directory and its parents —
+                    which under systemd is `/`, so name the file explicitly
+                    for anything that is not a hand-run instance.
+-h, --help
+-V, --version
+```
+
+Variables already set in the environment always win, so systemd's
+`EnvironmentFile=` and a container's injected variables are never overridden
+by a file. Startup logs which env file was loaded, or that none was; an
+`--env-file` that cannot be read or parsed stops the process rather than
+leaving the service running on a configuration nobody chose. So does an
+unrecognized flag.
+
 ## Scope
 
 This binary is **the API only**. The HTML landing page and the Swagger/ReDoc
@@ -170,6 +190,7 @@ listed here.
 | Malformed-JSON detail text | CPython `json` wording, with a character offset | `serde_json` wording | Both are `JSON parse error - <decoder message>`; the decoder is not the same one. |
 | Percent-encoded paths | Decoded before routing | Matched raw | `/pre%70rod/collateral/` is served by Django and 404s here. |
 | Malformed `Content-Length` | `{"detail": "Invalid Content-Length"}` | hyper rejects the header while parsing the request, so a bare 400 with no body and no `X-Request-ID` | Not answerable above hyper. The equivalent check in `middleware/body_limit.rs` stays for any transport that does not pre-validate the header. |
+| An env-file value containing a space | django-environ reads it bare | The parser refuses the whole line | Quote it — `PREPROD_NETWORK="--testnet-magic 1"` — and both read the identical string. `sample.env` ships quoted for that reason. This only affects a `.env` file; systemd's `EnvironmentFile=` and container variables are parsed by the platform, not here. |
 | `known.hosts.json` in the container image | Copied in (`COPY . /app/`) | Not copied | The Docker build context is `rs/`, and the registry lives at the repo root. A container serves `{}` unless `KNOWN_HOSTS_PATH` points at a mounted file — the service logs which at startup. |
 
 Config parsing also differs in small ways that only surface with unusual values:

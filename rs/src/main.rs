@@ -1,5 +1,5 @@
-//! Entry point: load configuration, install logging, validate the signing
-//! identity, then serve.
+//! Entry point: parse the few flags, load configuration, install logging,
+//! validate the signing identity, then serve.
 //!
 //! A misconfigured deploy must fail in the logs rather than 500 on the first
 //! POST, so the signing identity is validated before the listener binds.
@@ -7,15 +7,35 @@
 use std::net::SocketAddr;
 use std::process::ExitCode;
 
-use collateral_provider::{config::Config, logging, routes, state::AppState, VERSION};
+use collateral_provider::cli::{self, Invocation};
+use collateral_provider::{config, config::Config, logging, routes, state::AppState, VERSION};
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    // `Config::from_env` loads `.env` itself, so there is one documented place
-    // where that happens and startup does not walk and parse the file twice.
-    //
-    // Configuration has to be readable before logging can be configured, so
-    // a configuration failure has nowhere to go but stderr.
+    let env_file = match cli::parse(std::env::args().skip(1)) {
+        Ok(Invocation::Run { env_file }) => env_file,
+        Ok(Invocation::Print(text)) => {
+            println!("{text}");
+            return ExitCode::SUCCESS;
+        }
+        Err(err) => {
+            eprintln!("{err}\n\n{}", cli::USAGE);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // The env file has to be in the environment before the configuration is
+    // read from it, and both happen before logging exists — so a failure here
+    // has nowhere to go but stderr, and the outcome is logged further down
+    // once there is somewhere to log it.
+    let loaded_env_file = match config::load_env_file(env_file.as_deref()) {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("CRITICAL: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let config = match Config::from_env() {
         Ok(config) => config,
         Err(err) => {
@@ -31,6 +51,20 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // Which env file, if any, is the first thing to establish when a running
+    // service disagrees with the file an operator just edited. Discovery walks
+    // up from the working directory, which under systemd is `/`, so "none"
+    // is a normal answer there and a surprising one anywhere else.
+    match &loaded_env_file {
+        Some(path) => {
+            tracing::info!(target: "api", "Loaded environment file {}", path.display())
+        }
+        None => tracing::info!(
+            target: "api",
+            "No environment file loaded; using the process environment"
+        ),
+    }
 
     let bind_address = config.bind_address;
     let state = match AppState::new(config) {

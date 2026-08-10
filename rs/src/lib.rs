@@ -13,6 +13,7 @@
 
 pub mod ban_list;
 pub mod cbor;
+pub mod cli;
 pub mod config;
 pub mod data_files;
 pub mod error;

@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ipnet::IpNet;
 
@@ -79,12 +79,45 @@ pub struct Config {
 /// while other tests run in parallel.
 pub type Lookup<'a> = &'a dyn Fn(&str) -> Option<String>;
 
+/// Load an env file into the process environment, and say which one.
+///
+/// `dotenvy` never overrides a variable that is already set, so systemd's
+/// `EnvironmentFile=` and a container platform's injected variables always
+/// win — the file is a convenience for a local or hand-run instance, not a
+/// second source of truth.
+///
+/// Finding nothing is only acceptable when nothing was asked for. Discovery
+/// walks up from the working directory, which under systemd is `/`, so a
+/// service that quietly found no file is indistinguishable from one that
+/// found the wrong one. An explicit `--env-file` that cannot be read is
+/// therefore fatal, and the caller logs which file was loaded either way.
+///
+/// A file that exists but does not parse is fatal in both modes. Discarding
+/// that error — which is what this used to do — turns an operator's typo into
+/// `PKH env var is required`, a message about a variable they did set, in a
+/// file the process never mentions.
+pub fn load_env_file(explicit: Option<&Path>) -> Result<Option<PathBuf>, ConfigError> {
+    let unreadable = |path: &Path, err: dotenvy::Error| {
+        ConfigError::Invalid(format!("cannot read {}: {}", path.display(), err))
+    };
+    match explicit {
+        Some(path) => dotenvy::from_path(path)
+            .map(|()| Some(path.to_path_buf()))
+            .map_err(|err| unreadable(path, err)),
+        None => match dotenvy::dotenv() {
+            Ok(path) => Ok(Some(path)),
+            // No file at all is the normal case under systemd and in a
+            // container, where the environment arrives by other means.
+            Err(err) if err.not_found() => Ok(None),
+            Err(err) => Err(unreadable(Path::new(".env"), err)),
+        },
+    }
+}
+
 impl Config {
-    /// Read and validate the whole configuration from the environment.
+    /// Read and validate the whole configuration from the process
+    /// environment. Call [`load_env_file`] first if an env file is wanted.
     pub fn from_env() -> Result<Self, ConfigError> {
-        // Container platforms inject variables directly and have no .env file;
-        // that is fine, and `dotenvy` does not override anything already set.
-        let _ = dotenvy::dotenv();
         Self::from_lookup(&|key| std::env::var(key).ok())
     }
 
@@ -377,6 +410,41 @@ mod tests {
     use std::time::Duration;
 
     const PKH: &str = "6af53ff4f054348ad825c692dd9db8f1760a8e0eacf9af9f99306513";
+
+    /// A named env file that cannot be read is fatal, and the message says
+    /// which file and why.
+    ///
+    /// The failing case here is the one that shipped in `sample.env`: an
+    /// unquoted value containing a space, which django-environ accepts and
+    /// this parser refuses. Discarding that error — the previous behaviour —
+    /// left the operator staring at `PKH env var is required` for a variable
+    /// their file sets, having never been told the file was skipped.
+    #[test]
+    fn an_unreadable_env_file_is_named_rather_than_swallowed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("absent.env");
+        let err = load_env_file(Some(&missing)).expect_err("missing file");
+        assert!(
+            err.to_string()
+                .starts_with(&format!("cannot read {}", missing.display())),
+            "{err}"
+        );
+
+        let unparseable = dir.path().join("bad.env");
+        std::fs::write(&unparseable, "PREPROD_NETWORK=--testnet-magic 1\n").expect("write");
+        let err = load_env_file(Some(&unparseable)).expect_err("unparseable file");
+        assert!(err.to_string().contains("error at line index"), "{err}");
+
+        // And the quoted spelling, which both implementations read alike, is
+        // accepted — the fix `sample.env` now carries.
+        let good = dir.path().join("good.env");
+        std::fs::write(&good, "COLLATERAL_ENV_FILE_PROBE=\"--testnet-magic 1\"\n").expect("write");
+        assert_eq!(load_env_file(Some(&good)).expect("loads"), Some(good));
+        assert_eq!(
+            std::env::var("COLLATERAL_ENV_FILE_PROBE").as_deref(),
+            Ok("--testnet-magic 1")
+        );
+    }
 
     fn base_env() -> HashMap<String, String> {
         [
