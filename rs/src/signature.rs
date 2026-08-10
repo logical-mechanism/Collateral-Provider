@@ -369,13 +369,6 @@ mod tests {
     const CHAIN_TX2: &str = "84a300d9010281825820613ef2c284082d666d6a9b0b309437b10d1099eaca46134f77828294ad21347600018282581d60fdd320cd9c529f021452b5b39eb3a6d854f3d1d59c329d2ed1b803951a0be79cc9a300581d60fdd320cd9c529f021452b5b39eb3a6d854f3d1d59c329d2ed1b80395011a001822ca03d81858a38203589f589d010100332229800ab9cab9a9bae0039bae0024888966002a66008921104920616c77617973206661696c203a2f00168a4d15330044911856616c696461746f722072657475726e65642066616c73650013656400c4c11e581c21b5bcf6f42eeac1b00121579e1a490134b08510120be94b5c3a0c86004c0122582000e4d20dca46f31c227666ee477770304a4f805cb2e00a4e379d243fbbc0c9d10001021a0003bf3ba100d90102818258207668cfa9f6d2de5b4b86de0dc291f26574c93a9e57bd7e6a634fdb85fe19518458401bf79ba1e08f6e1546f58f82ab04991924acfd45323656f24a390b34d232e6319657187872e55d8751a51c31390b621a60ce868a3957050bab5325581d947f0ef5f6";
     const CHAIN_TX2_ID: &str = "d633980cd09ed263782161381de7a48a6c5814ddfff0b2eef4999e851c13ce70";
 
-    fn dev_key_dir() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("crate has a parent directory")
-            .join("collateral_provider/api/key")
-    }
-
     fn decode(hex_text: &str) -> Vec<u8> {
         hex::decode(hex_text).expect("test vector is hex")
     }
@@ -389,8 +382,25 @@ mod tests {
         decoder.skip_value().expect("body").to_vec()
     }
 
+    /// Write a key file in the envelope `cardano-cli` actually produces —
+    /// `type` and `description` alongside `cborHex`, not `cborHex` alone.
+    ///
+    /// The parser only reads `cborHex`, so a minimal file would pass every
+    /// test in here while agreeing with nothing on disk. Writing the real
+    /// three-field shape means the suite and the operator's files are the
+    /// same input.
     fn write_key(path: &Path, value: &str) {
-        fs::write(path, format!("{{\"cborHex\":\"5820{value}\"}}")).expect("write key file");
+        write_key_envelope(path, "PaymentSigningKeyShelley_ed25519", value);
+    }
+
+    fn write_key_envelope(path: &Path, key_type: &str, value: &str) {
+        fs::write(
+            path,
+            format!(
+                "{{\n    \"type\": \"{key_type}\",\n    \"description\": \"Payment Key\",\n    \"cborHex\": \"5820{value}\"\n}}\n"
+            ),
+        )
+        .expect("write key file");
     }
 
     fn set_mtime(path: &Path, when: SystemTime) {
@@ -566,23 +576,24 @@ mod tests {
 
     // --- key material ------------------------------------------------------
 
+    /// A `cardano-cli` key file, in the exact envelope the tool writes.
+    ///
+    /// This used to read `collateral_provider/api/key/payment.{skey,vkey}`
+    /// directly. Those files are gitignored — every developer generates their
+    /// own pair — so the test asserted a specific keypair that exists on one
+    /// machine and in no checkout, and could never pass in CI. The property
+    /// worth keeping is that the real three-field envelope parses; the bytes
+    /// it carries do not have to come from anyone's key directory.
     #[test]
-    fn repo_dev_keys_are_a_consistent_identity() {
+    fn a_cardano_cli_key_envelope_parses() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let vkey = dir.path().join("payment.vkey");
+        write_key_envelope(&vkey, "PaymentVerificationKeyShelley_ed25519", DEV_VKEY);
+
         let cache = KeyCache::new();
-        let dir = dev_key_dir();
-        assert_eq!(
-            cache
-                .get_key_from_file(&dir.join("payment.vkey"))
-                .expect("dev vkey"),
-            DEV_VKEY
-        );
-        cache
-            .validate_key_material(
-                &dir.join("payment.skey"),
-                &dir.join("payment.vkey"),
-                DEV_PKH,
-            )
-            .expect("dev identity is consistent");
+        assert_eq!(cache.get_key_from_file(&vkey).expect("vkey"), DEV_VKEY);
+        // And the identity it describes is the one the constants name.
+        assert_eq!(hex::encode(blake2b(&decode(DEV_VKEY), 28)), DEV_PKH);
     }
 
     #[test]
