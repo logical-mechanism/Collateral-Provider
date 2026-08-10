@@ -1,0 +1,244 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Cardano Collateral Provider API",
+    "version": "1.3.0",
+    "description": "Submit a Cardano transaction CBOR that spends this provider's shared collateral UTxO and receive a vkey witness for it. One key and one collateral UTxO per network, shared across many users so they do not have to set up collateral in their own wallet."
+  },
+  "paths": {
+    "/{environment}/collateral/": {
+      "post": {
+        "operationId": "provide_collateral",
+        "summary": "Sign a transaction that uses this provider's collateral",
+        "description": "Validate the submitted Cardano transaction CBOR against the collateral-usage contract and, if it passes, return a vkey witness for it. Validation includes: collateral UTxO matches the configured one for this network, the provider PKH appears in required signers, the collateral is not in inputs, the is_valid flag is true, the script-data hash binds the submitted redeemers/datums, committed execution units cover the evaluated budgets, and Koios `evaluateTransaction` accepts the tx. Rate limited per IP.",
+        "parameters": [
+          {
+            "name": "environment",
+            "in": "path",
+            "required": true,
+            "description": "One of the configured networks (e.g. `preprod`, `mainnet`).",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProvideCollateral" },
+              "examples": {
+                "sample": {
+                  "summary": "Sample request",
+                  "value": { "tx": "84a900d901028182582000...f5f6" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Witness CBOR (hex). Decoded shape: `[0, [pubkey, signature]]`.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WitnessResponse" },
+                "examples": {
+                  "sample": {
+                    "summary": "Sample success",
+                    "value": { "witness": "8200825820...5840..." }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — invalid environment, invalid CBOR, or tx fails the collateral-usage rules.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "411": {
+            "description": "Content-Length header is required on the collateral endpoint.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "413": {
+            "description": "JSON request body exceeds the configured pre-parser byte limit.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type — body must be application/json.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the caller may retry.",
+                "schema": { "type": "integer" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "503": {
+            "description": "Validation upstream or local signing identity is unavailable; try again later.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "healthz",
+        "summary": "Liveness/readiness check",
+        "description": "Returns 200 if the service is configured well enough to serve signing requests (the current signing key, verification key, and PKH are cryptographically consistent). Returns 503 with a list of problems otherwise. Suitable for readiness probes; not rate limited and never calls Koios.",
+        "responses": {
+          "200": {
+            "description": "Service ready.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthOk" }
+              }
+            }
+          },
+          "503": {
+            "description": "Service has critical config problems.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/livez": {
+      "get": {
+        "operationId": "livez",
+        "summary": "Process liveness check",
+        "description": "Returns 200 whenever the process can serve requests. Never calls an upstream.",
+        "responses": {
+          "200": {
+            "description": "Process is alive.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthOk" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/known_hosts/": {
+      "get": {
+        "operationId": "known_hosts",
+        "summary": "Public collateral-provider registry",
+        "description": "Return the last fully validated known-hosts registry as JSON, keyed by 28-byte provider payment key hash. Returns `{}` if the file has never existed, so consumers do not have to handle a second shape.",
+        "responses": {
+          "200": {
+            "description": "Registry JSON.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/KnownHosts" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/schema": {
+      "get": {
+        "operationId": "schema",
+        "summary": "OpenAPI document",
+        "description": "This document.",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.0.3 JSON.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ProvideCollateral": {
+        "type": "object",
+        "required": ["tx"],
+        "properties": {
+          "tx": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The full transaction CBOR (body + witness set + is_valid + auxiliary data), hex-encoded."
+          },
+          "additional_utxos": {
+            "type": "array",
+            "items": {},
+            "maxItems": 0,
+            "description": "Reserved compatibility field. It must be omitted or empty; caller-supplied UTxOs are never forwarded to the evaluator."
+          }
+        }
+      },
+      "WitnessResponse": {
+        "type": "object",
+        "required": ["witness"],
+        "properties": {
+          "witness": {
+            "type": "string",
+            "description": "Hex-encoded vkey witness CBOR: `[0, [pubkey, signature]]`."
+          }
+        }
+      },
+      "HealthOk": {
+        "type": "object",
+        "required": ["status", "version"],
+        "properties": {
+          "status": { "type": "string", "example": "ok" },
+          "version": { "type": "string" }
+        }
+      },
+      "HealthError": {
+        "type": "object",
+        "required": ["status", "problems"],
+        "properties": {
+          "status": { "type": "string", "example": "error" },
+          "problems": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "KnownHosts": {
+        "type": "object",
+        "additionalProperties": { "type": "object" },
+        "description": "Object keyed by 56-character lowercase-hex provider PKH."
+      },
+      "Error": {
+        "type": "object",
+        "required": ["detail"],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "Human-readable reason. Every 4xx/5xx from this API uses this single shape."
+          }
+        }
+      }
+    }
+  }
+}

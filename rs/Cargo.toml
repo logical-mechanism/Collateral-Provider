@@ -1,0 +1,72 @@
+[package]
+name = "collateral-provider"
+version = "1.3.0"
+edition = "2021"
+# Set by the dependency graph, not by this crate's own syntax: `time` 0.3
+# requires 1.88. Keep it in step with the Dockerfile's base image, or the
+# container build fails while `cargo build` on a developer's newer toolchain
+# succeeds.
+rust-version = "1.88"
+description = "Cardano collateral provider API — Rust port of the Django/DRF service"
+license = "MIT"
+publish = false
+
+[lib]
+name = "collateral_provider"
+path = "src/lib.rs"
+
+[[bin]]
+name = "collateral-provider"
+path = "src/main.rs"
+
+[dependencies]
+# HTTP server
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "matched-path", "original-uri"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "fs"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors", "catch-panic"] }
+http-body-util = "0.1"
+bytes = "1"
+
+# Upstream (Ogmios / Koios) client
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2", "stream", "charset"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+# Crypto
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "fast"] }
+blake2 = "0.10"
+digest = "0.10"
+subtle = "2"
+
+# Utilities
+hex = "0.4"
+thiserror = "2"
+dotenvy = "0.15"
+rand = "0.9"
+ipnet = "2"
+regex = "1"
+url = "2"
+time = { version = "0.3", features = ["formatting", "macros"] }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "registry", "std"] }
+prometheus = { version = "0.14", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
+axum = { version = "0.8", features = ["http1", "json", "tokio"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
+strip = "symbols"

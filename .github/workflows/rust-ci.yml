@@ -1,0 +1,127 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "rs/**"
+      - ".github/workflows/rust-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "rs/**"
+      - ".github/workflows/rust-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: rs
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version && cargo --version
+
+      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2
+        with:
+          workspaces: rs
+
+      - name: Format
+        run: cargo fmt --check
+
+      # --locked so a dependency cannot float underneath a signing service
+      # without the lockfile change showing up in review.
+      - name: Build
+        run: cargo build --all-targets --locked
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      # Runs the CBOR conformance, chain-corpus, differential and robustness
+      # suites. No network and no Python: tests/live_upstream.rs skips itself
+      # unless COLLATERAL_LIVE_UPSTREAM is set.
+      - name: Test
+        run: cargo test --all-targets --locked
+
+      - name: Release build
+        run: cargo build --release --locked
+
+      # A green unit suite does not prove the binary boots. Start it against
+      # the repo's development keys and require a real 200 from /healthz,
+      # which revalidates the signing identity cryptographically.
+      - name: Smoke test the binary
+        run: |
+          set -euo pipefail
+          PKH=$(python3 - <<'PY'
+          import hashlib, json
+          key = json.load(open("../collateral_provider/api/key/payment.vkey"))["cborHex"][4:]
+          print(hashlib.blake2b(bytes.fromhex(key), digest_size=28).hexdigest())
+          PY
+          )
+          export PKH
+          export ENVIRONMENT=development
+          export SKEY_PATH="$PWD/../collateral_provider/api/key/payment.skey"
+          export VKEY_PATH="$PWD/../collateral_provider/api/key/payment.vkey"
+          export KNOWN_HOSTS_PATH="$PWD/../known.hosts.json"
+          export PREPROD_TXID=$(printf '0%.0s' $(seq 64))
+          export PREPROD_TXIDX=0
+          export PREPROD_NETWORK="--testnet-magic 1"
+          export MAINNET_TXID=$(printf '0%.0s' $(seq 64))
+          export MAINNET_TXIDX=0
+          export MAINNET_NETWORK="--mainnet"
+          export BIND_ADDRESS=127.0.0.1:8099
+          export LOG_TO_CONSOLE=True LOG_FORMAT=json LOG_LEVEL=INFO
+
+          ./target/release/collateral-provider > /tmp/smoke.log 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 100); do
+            if curl -sf -o /dev/null http://127.0.0.1:8099/livez; then break; fi
+            sleep 0.1
+          done
+
+          echo "livez:"      && curl -sf http://127.0.0.1:8099/livez
+          echo "healthz:"    && curl -sf http://127.0.0.1:8099/healthz
+          echo "known_hosts:" && curl -sf -o /dev/null http://127.0.0.1:8099/known_hosts/
+
+          # Unknown networks and unknown paths must answer in the documented
+          # envelope rather than an HTML page or a redirect.
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'content-type: application/json' -d '{"tx":"00"}' \
+            http://127.0.0.1:8099/nosuchnet/collateral/)" = "400"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8099/nope)" = "404"
+
+          # SIGTERM must drain rather than be ignored.
+          kill -TERM "$server"
+          for _ in $(seq 1 50); do
+            kill -0 "$server" 2>/dev/null || break
+            sleep 0.1
+          done
+          if kill -0 "$server" 2>/dev/null; then
+            echo "server did not exit on SIGTERM" >&2
+            cat /tmp/smoke.log >&2
+            exit 1
+          fi
+          grep -q "Collateral provider stopped" /tmp/smoke.log
+
+      - name: Verify the container image builds
+        run: docker build -t collateral-provider-rs .

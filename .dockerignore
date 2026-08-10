@@ -36,6 +36,12 @@ collateral_provider/api/key/
 .idea/
 .vscode/
 
+# The Rust port is a separate image (rs/Dockerfile). This image is the Python
+# service and needs nothing from it. Without this rule the root build context
+# also carries rs/target, which is gigabytes on any machine that has run
+# `cargo build`.
+rs/
+
 # Docs/scripts that aren't needed inside the running image
 .do/
 docs/
