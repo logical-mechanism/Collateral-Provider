@@ -108,16 +108,22 @@ jobs:
             sleep 0.1
           done
 
-          echo "livez:"      && curl -sf http://127.0.0.1:8099/livez
-          echo "healthz:"    && curl -sf http://127.0.0.1:8099/healthz
-          echo "known_hosts:" && curl -sf -o /dev/null http://127.0.0.1:8099/known_hosts/
-
-          # Unknown networks and unknown paths must answer in the documented
-          # envelope rather than an HTML page or a redirect.
-          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-            -H 'content-type: application/json' -d '{"tx":"00"}' \
-            http://127.0.0.1:8099/nosuchnet/collateral/)" = "400"
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8099/nope)" = "404"
+          # The real assertions live in tests/live_service.rs, which drives the
+          # assembled binary over HTTP: health, the request-shape wording, the
+          # error envelope, the 411/413/415 paths. None of them reach an
+          # upstream — the corpus transaction it posts is refused by a local
+          # check — so this stays network-free and deterministic.
+          #
+          # --nocapture because a skipped run still reports ok; without it a
+          # green line would not prove the suite found a server.
+          COLLATERAL_BASE_URL=http://127.0.0.1:8099 \
+            cargo test --locked --test live_service -- --nocapture 2>&1 | tee /tmp/live.log
+          # Fail loudly if the suite skipped itself rather than running.
+          if grep -q "^skipped: no collateral provider listening" /tmp/live.log; then
+            echo "live_service could not reach the server it was pointed at" >&2
+            cat /tmp/smoke.log >&2
+            exit 1
+          fi
 
           # SIGTERM must drain rather than be ignored.
           kill -TERM "$server"

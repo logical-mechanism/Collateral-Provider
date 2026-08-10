@@ -103,10 +103,46 @@ most for the codec:
   bombs (a byte string declaring 2^64−1 bytes must error in microseconds, not
   allocate); depth bombs; 16 KiB of container heads.
 
-[tests/live_upstream.rs](tests/live_upstream.rs) checks Ogmios wire
-compatibility against the public endpoints. It is skipped unless
-`COLLATERAL_LIVE_UPSTREAM=1`, and prints why when skipped, so a green log never
-implies it ran.
+### Running it for real
+
+`cargo test` never touches the network. Two suites go further and are off
+unless you opt in:
+
+```sh
+./scripts/e2e.sh                                    # the whole cycle
+COLLATERAL_LIVE_UPSTREAM=1 cargo test --test live_upstream -- --nocapture
+```
+
+[scripts/e2e.sh](scripts/e2e.sh) starts a local instance, builds a transaction
+that genuinely earns a witness, runs [tests/live_service.rs](tests/live_service.rs)
+against it, and stops. That test drives the assembled binary over real HTTP —
+middleware ordering, request-shape wording, the error envelope — and finishes
+by checking that the returned witness verifies as Ed25519 over
+`blake2b256(exact submitted body bytes)` and that the signing key's hash is
+the one published at `/known_hosts/`. Reaching a 200 at all means the service
+fetched live protocol parameters, verified the script-data binding, and ran
+live phase-2 evaluation.
+
+The instance is configured by [scripts/run-local.sh](scripts/run-local.sh) to
+sponsor a real, unspent preprod collateral UTxO while signing with this repo's
+development key. Nothing is submitted and no funds move: field 13 only *names*
+that UTxO, and the transaction's input belongs to someone else. Run
+`./scripts/run-local.sh` on its own to keep an instance up and poke at it by
+hand.
+
+The transaction builder is `../scripts/py/dummy_collateral_tx.py`. That is the
+only Python in this path and it is a test tool, not a runtime dependency —
+`cargo test` never needs it and neither does the binary. Without it `e2e.sh`
+runs everything except the final witness check and says so.
+
+[tests/live_upstream.rs](tests/live_upstream.rs) separately checks Ogmios wire
+compatibility against the public endpoints and reports whether the frozen cost
+models have drifted from the network's current ones.
+
+A caveat on both: skipped tests still report `ok`, because libtest has no
+third outcome, and the reason only surfaces under `--nocapture`. A green line
+from either suite proves nothing unless you saw the output — which is why
+`e2e.sh` always passes `--nocapture`.
 
 ## Deliberate differences from the Python service
 

@@ -12,8 +12,9 @@
 //! COLLATERAL_LIVE_UPSTREAM=1 cargo test --test live_upstream -- --nocapture
 //! ```
 //!
-//! A skipped run prints why, so a green CI log never silently implies these
-//! ran.
+//! Skipped tests still report `ok` — libtest has no third outcome — and the
+//! reason only reaches you under `--nocapture`. Treat a green line here as
+//! proof of nothing unless you saw the output.
 
 use std::sync::Arc;
 
